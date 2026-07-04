@@ -77,7 +77,7 @@ type ProcessLog struct {
 // Terminal reports whether the process reached a final state.
 func (p Process) Terminal() bool {
 	switch p.Status {
-	case "completed", "failed", "stopped", "interrupted":
+	case "completed", "failed", "stopped", "interrupted", "compensated":
 		return true
 	}
 	return false

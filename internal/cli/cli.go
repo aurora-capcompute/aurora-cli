@@ -412,6 +412,9 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		case process.Status == "stopped":
 			a.printf("■ stopped")
 			return nil
+		case process.Status == "compensated":
+			a.printf("↩ rolled back — %s", process.Answer)
+			return nil
 		case process.Status == "interrupted":
 			return fmt.Errorf("process interrupted: %s", process.Error)
 		case process.Parked() && !hinted:
