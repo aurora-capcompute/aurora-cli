@@ -2,6 +2,12 @@
 // its own wire types instead of importing the runtime: the CLI is the API's
 // first external consumer, and a client that borrowed the server's structs
 // would hide wire gaps instead of exposing them.
+//
+// The read surface is deliberately small. GET /v1/sessions/{id} returns the
+// whole session log — session metadata, history, and every process with its
+// full state, delegation links, journal across all revisions, and tasks — and
+// every narrower view (the current journal, one revision, the call graph, a
+// task list) is a grouping of that one payload, computed here in the terminal.
 package client
 
 import (
@@ -34,10 +40,11 @@ type SessionSummary struct {
 	Tags            map[string]string `json:"tags,omitempty"`
 }
 
-type Session struct {
-	SessionSummary
-	History   []Message `json:"history"`
-	Processes []Process `json:"processes"`
+// SessionLog is the one comprehensive read: GET /v1/sessions/{id}.
+type SessionLog struct {
+	Session   SessionSummary `json:"session"`
+	History   []Message      `json:"history,omitempty"`
+	Processes []ProcessLog   `json:"processes"`
 }
 
 type Process struct {
@@ -54,6 +61,16 @@ type Process struct {
 	UpdatedAt     time.Time       `json:"updated_at"`
 	ProgramDigest string          `json:"program_digest"`
 	Manifest      json.RawMessage `json:"manifest,omitempty"`
+}
+
+// ProcessLog is a process within a session log: its snapshot plus delegation
+// links, its complete journal across all revisions, and its tasks.
+type ProcessLog struct {
+	Process
+	ParentProcessID string         `json:"parent_process_id,omitempty"`
+	ChildProcessIDs []string       `json:"child_process_ids,omitempty"`
+	Entries         []JournalEntry `json:"entries"`
+	Tasks           []Task         `json:"tasks,omitempty"`
 }
 
 // Terminal reports whether the process reached a final state.
@@ -186,14 +203,15 @@ func (c *Client) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	return out, err
 }
 
-func (c *Client) CreateSession(ctx context.Context, tags map[string]string) (Session, error) {
-	var out Session
+func (c *Client) CreateSession(ctx context.Context, tags map[string]string) (SessionLog, error) {
+	var out SessionLog
 	err := c.do(ctx, http.MethodPost, "/v1/sessions", map[string]any{"tags": tags}, &out)
 	return out, err
 }
 
-func (c *Client) GetSession(ctx context.Context, id string) (Session, error) {
-	var out Session
+// Session returns the complete session log — the one comprehensive read.
+func (c *Client) Session(ctx context.Context, id string) (SessionLog, error) {
+	var out SessionLog
 	err := c.do(ctx, http.MethodGet, "/v1/sessions/"+url.PathEscape(id), nil, &out)
 	return out, err
 }
@@ -208,27 +226,10 @@ func (c *Client) CreateProcess(ctx context.Context, sessionID, message string, m
 	return out, err
 }
 
+// GetProcess is the cheap single-process status poll.
 func (c *Client) GetProcess(ctx context.Context, id string) (Process, error) {
 	var out Process
 	err := c.do(ctx, http.MethodGet, "/v1/processes/"+url.PathEscape(id), nil, &out)
-	return out, err
-}
-
-func (c *Client) Journal(ctx context.Context, processID string) ([]JournalEntry, error) {
-	var out []JournalEntry
-	err := c.do(ctx, http.MethodGet, "/v1/processes/"+url.PathEscape(processID)+"/journal", nil, &out)
-	return out, err
-}
-
-func (c *Client) JournalRevisions(ctx context.Context, processID string) (map[uint64][]JournalEntry, error) {
-	var out map[uint64][]JournalEntry
-	err := c.do(ctx, http.MethodGet, "/v1/processes/"+url.PathEscape(processID)+"/journal/revisions", nil, &out)
-	return out, err
-}
-
-func (c *Client) Tasks(ctx context.Context, processID string) ([]Task, error) {
-	var out []Task
-	err := c.do(ctx, http.MethodGet, "/v1/processes/"+url.PathEscape(processID)+"/tasks", nil, &out)
 	return out, err
 }
 

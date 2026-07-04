@@ -152,16 +152,25 @@ func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) 
 	}
 }
 
-// run executes one CLI command line and returns its rendered output.
-func run(t *testing.T, server string, args ...string) string {
+// run executes one CLI command line and returns its rendered output. The
+// server and current session/process come from the saved context (set up per
+// test via AURORA_CONFIG), exactly as they would for a user.
+func run(t *testing.T, args ...string) string {
 	t.Helper()
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := Run(ctx, append([]string{"-server", server}, args...), &out); err != nil {
+	if err := Run(ctx, args, &out); err != nil {
 		t.Fatalf("aurora-cli %s: %v\n%s", strings.Join(args, " "), err, out.String())
 	}
 	return out.String()
+}
+
+// useContext isolates a per-test context file and points it at the server.
+func useContext(t *testing.T, server string) {
+	t.Helper()
+	t.Setenv("AURORA_CONFIG", filepath.Join(t.TempDir(), "context.json"))
+	run(t, "use", "-server", server)
 }
 
 func TestTerminalEndToEnd(t *testing.T) {
@@ -178,9 +187,10 @@ func TestTerminalEndToEnd(t *testing.T) {
 	llm := scriptedLLM(t)
 	defer llm.Close()
 	server := startDist(t, bin, programsDir, t.TempDir())
+	useContext(t, server)
 
 	// Programs arrived from the registry.
-	if got := run(t, server, "programs"); !strings.Contains(got, "agent  ") {
+	if got := run(t, "programs"); !strings.Contains(got, "agent  ") {
 		t.Fatalf("programs = %q", got)
 	}
 
@@ -199,9 +209,10 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// send new: creates the session, starts the process, follows the stream
-	// through the timer park and the fire, and prints the final answer.
-	sent := run(t, server, "send", "new", "take a nap, then report back", "-manifest", manifestPath)
+	// send -new creates the session, switches context to it, starts the
+	// process, follows the stream through the timer park and fire, and prints
+	// the final answer. Flags after the message exercise interleaved parsing.
+	sent := run(t, "send", "-new", "take a nap, then report back", "-manifest", manifestPath)
 	if !strings.Contains(sent, "session ses_") || !strings.Contains(sent, "process proc_") {
 		t.Fatalf("send output missing ids:\n%s", sent)
 	}
@@ -211,38 +222,46 @@ func TestTerminalEndToEnd(t *testing.T) {
 	if !strings.Contains(sent, "task") {
 		t.Fatalf("send did not surface the timer task:\n%s", sent)
 	}
-
 	sessionID := extract(t, sent, "session ")
-	processID := extract(t, sent, "process ")
 
-	// The session folded the turn into history.
-	shown := run(t, server, "session", sessionID)
-	if !strings.Contains(shown, "user: take a nap") || !strings.Contains(shown, "assistant: woke up") {
-		t.Fatalf("session missing history:\n%s", shown)
+	// The context now remembers the session and process — no ids retyped.
+	if got := run(t, "context"); !strings.Contains(got, sessionID) {
+		t.Fatalf("context did not save the session:\n%s", got)
 	}
 
-	// The journal renders the full narrative.
-	journal := run(t, server, "journal", processID)
+	// The whole session log (current session, no id) folds the conversation
+	// and renders the full journal narrative from one fetch.
+	shown := run(t, "log")
+	if !strings.Contains(shown, "user: take a nap") || !strings.Contains(shown, "assistant: woke up") {
+		t.Fatalf("log missing history:\n%s", shown)
+	}
 	for _, want := range []string{"agent.input", "openai.chat", "timer.set", "agent.finish"} {
-		if !strings.Contains(journal, want) {
-			t.Fatalf("journal missing %s:\n%s", want, journal)
+		if !strings.Contains(shown, want) {
+			t.Fatalf("log missing %s:\n%s", want, shown)
 		}
 	}
 
-	// Tasks render with their resolution state.
-	tasks := run(t, server, "tasks", processID)
-	if !strings.Contains(tasks, "timer.set") || !strings.Contains(tasks, "resolved completed by timer") {
-		t.Fatalf("tasks = %q", tasks)
+	// journal with no id uses the current process; tasks render resolution.
+	if got := run(t, "journal"); !strings.Contains(got, "timer.set") {
+		t.Fatalf("journal (current process) = %q", got)
+	}
+	if got := run(t, "tasks"); !strings.Contains(got, "timer.set") || !strings.Contains(got, "resolved completed by timer") {
+		t.Fatalf("tasks = %q", got)
+	}
+
+	// graph renders the (single-node here) call tree.
+	if got := run(t, "graph"); !strings.Contains(got, "completed") {
+		t.Fatalf("graph = %q", got)
 	}
 
 	// Retention: nothing non-terminal pins the digest anymore.
-	if got := run(t, server, "retention"); !strings.Contains(got, "decommissionable") {
+	if got := run(t, "retention"); !strings.Contains(got, "decommissionable") {
 		t.Fatalf("retention = %q", got)
 	}
 
-	// sessions lists the session with its title.
-	if got := run(t, server, "sessions"); !strings.Contains(got, sessionID) {
-		t.Fatalf("sessions = %q", got)
+	// sessions marks the current session.
+	if got := run(t, "sessions"); !strings.Contains(got, "* "+sessionID) {
+		t.Fatalf("sessions did not mark the current one:\n%s", got)
 	}
 }
 
@@ -269,6 +288,7 @@ func TestTerminalApproveDeny(t *testing.T) {
 	}))
 	defer llm.Close()
 	server := startDist(t, bin, programsDir, t.TempDir())
+	useContext(t, server)
 
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
@@ -283,50 +303,55 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start detached: the process parks awaiting approval.
-	sent := run(t, server, "send", "new", "ask the model something", "-manifest", manifestPath, "-detach")
-	sessionID, processID := extract(t, sent, "session "), extract(t, sent, "process ")
-	waitStatus(t, server, processID, "waiting_for_task")
+	// Start detached: the process parks awaiting approval. -new switches the
+	// context to the fresh session and remembers the process.
+	sent := run(t, "send", "-new", "-detach", "-manifest", manifestPath, "ask the model something")
+	processID := extract(t, sent, "process ")
+	waitStatus(t, processID, "waiting_for_task")
 
-	tasks := run(t, server, "tasks", processID)
+	// tasks with no id lists the current session's tasks.
+	tasks := run(t, "tasks")
 	if !strings.Contains(tasks, "pending") || !strings.Contains(tasks, "openai.chat") {
 		t.Fatalf("tasks = %q", tasks)
 	}
 	taskID := extract(t, tasks, "")
 
-	// Approve from the terminal; the process resumes and completes.
-	if got := run(t, server, "approve", taskID, "-reason", "looks fine"); !strings.Contains(got, "approved") {
+	// Approve from the terminal; the process resumes and completes. proc with
+	// no id uses the current process.
+	if got := run(t, "approve", taskID, "-reason", "looks fine"); !strings.Contains(got, "approved") {
 		t.Fatalf("approve = %q", got)
 	}
-	waitStatus(t, server, processID, "completed")
-	if got := run(t, server, "proc", processID); !strings.Contains(got, "approved answer") {
+	waitStatus(t, processID, "completed")
+	if got := run(t, "proc"); !strings.Contains(got, "approved answer") {
 		t.Fatalf("proc = %q", got)
 	}
 
-	// Second turn on the same session: deny it.
-	sent = run(t, server, "send", sessionID, "and again", "-manifest", manifestPath, "-detach")
+	// Second turn on the same (still-current) session: deny it. send with no
+	// -new reuses the current session and updates the current process.
+	sent = run(t, "send", "-detach", "-manifest", manifestPath, "and again")
 	processID = extract(t, sent, "process ")
-	waitStatus(t, server, processID, "waiting_for_task")
-	tasks = run(t, server, "tasks", processID)
+	waitStatus(t, processID, "waiting_for_task")
+	// Narrow tasks to this process (the earlier one is resolved).
+	tasks = run(t, "tasks", processID)
 	taskID = extract(t, tasks, "")
-	if got := run(t, server, "deny", taskID, "-reason", "not today"); !strings.Contains(got, "denied") {
+	if got := run(t, "deny", taskID, "-reason", "not today"); !strings.Contains(got, "denied") {
 		t.Fatalf("deny = %q", got)
 	}
 	// The denial fails the cognition syscall; the guest aborts and the
 	// process finishes failed, with the reason on the journal.
-	waitStatus(t, server, processID, "failed")
-	journal := run(t, server, "journal", processID)
+	waitStatus(t, processID, "failed")
+	journal := run(t, "journal")
 	if !strings.Contains(journal, "denied") || !strings.Contains(journal, "not today") {
 		t.Fatalf("journal after deny:\n%s", journal)
 	}
 }
 
 // waitStatus polls the process until it reaches the wanted status.
-func waitStatus(t *testing.T, server, processID, want string) {
+func waitStatus(t *testing.T, processID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		got := run(t, server, "proc", processID)
+		got := run(t, "proc", processID)
 		if strings.Contains(got, want) {
 			return
 		}

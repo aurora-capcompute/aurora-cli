@@ -1,9 +1,10 @@
-// Package cli implements the aurora-cli commands: a terminal binding
-// directly to the aurora-dist /v1 API — create/attach sessions, start
-// processes, stream events, render journals and tasks, and resolve pending
-// approvals with their resolution tokens. It is the first terminal, and by
-// design the API-completeness test: everything it renders comes off the
-// wire, nothing from shared server code.
+// Package cli implements the aurora-cli commands: a terminal binding directly
+// to an aurora-dist /v1 API. It carries a saved working context (server,
+// current session, current process) the way kubectl does, so a session or
+// process chosen once need not be retyped; -server/-s/-p override it per
+// command. Reads all come off one endpoint — GET /v1/sessions/{id} returns the
+// whole session log — and this package renders the journal, call graph, task
+// list, and per-revision views from that single payload.
 package cli
 
 import (
@@ -19,91 +20,96 @@ import (
 	"strings"
 
 	"github.com/aurora-capcompute/aurora-cli/internal/client"
+	"github.com/aurora-capcompute/aurora-cli/internal/config"
 )
 
 const usage = `aurora-cli — terminal for an aurora-dist
 
-Usage: aurora-cli [-server URL] <command> [args]
+Usage: aurora-cli <command> [args] [-s session] [-p process] [-server url] [-o json]
 
-  sessions                       list sessions
-  new [-tag k=v ...]             create a session
-  send <session|new> <message> [-manifest file.json] [-detach]
+Context (kubectl-style; saved so you don't retype ids):
+  context                        show the current server, session, process
+  use [session] [-server url]    set the current session and/or server
+  new [-tag k=v ...] [-keep]     create a session and switch to it
+  sessions                       list sessions (current marked with *)
+
+Work in the current session:
+  send <message> [-manifest f] [-new] [-detach]
                                  start a process and follow it to its answer
-  watch [session]                stream a session (or the tenant firehose)
-  session <session>              show a session: history and processes
-  proc <process>                 show one process
-  journal <process> [-revisions] [-full]
-                                 render a process's journal
-  tasks <process>                list a process's tasks (with tokens)
+  ps                             list the session's processes
+  log [--all-revisions]          the whole session log (every process)
+  graph                          the delegation call-graph tree
+  watch [--firehose]             stream the session (or the tenant firehose)
+
+Work on the current process (override with -p):
+  proc                           show one process's status
+  journal [--all-revisions]      render one process's journal
+  tasks                          list tasks (pending ones show their token)
   approve <task> [-reason text]  resolve a pending task as approved
   deny <task> [-reason text]     resolve a pending task as denied
   resolve <task> -decision d [-data json] [-reason text] [-token t]
-                                 resolve with an explicit decision
-  stop <process>                 stop a process
-  retry <process> [-restart]     resume (default) or restart a process
-  programs                       list registered programs
-  reload                         re-scan the programs directory
-  retention                      program digests still pinned by live processes
+  stop                           stop the process
+  retry [-restart]               resume (default) or restart the process
 
-The server URL comes from -server or AURORA_DIST (default http://127.0.0.1:8080).`
+Programs:
+  programs · reload · retention
+
+The server resolves from -server, else the saved context, else $AURORA_DIST,
+else http://127.0.0.1:8080. -o json prints the raw payload instead of a table.`
 
 // Run executes one command line; out receives human output.
 func Run(ctx context.Context, args []string, out io.Writer) error {
-	global := flag.NewFlagSet("aurora-cli", flag.ContinueOnError)
-	global.SetOutput(out)
-	server := global.String("server", "", "aurora-dist base URL (default $AURORA_DIST or http://127.0.0.1:8080)")
-	global.Usage = func() { fmt.Fprintln(out, usage) }
-	if err := global.Parse(args); err != nil {
-		return err
+	if len(args) == 0 {
+		return (&app{out: out}).context(ctx, nil)
 	}
-	rest := global.Args()
-	if len(rest) == 0 {
-		fmt.Fprintln(out, usage)
-		return errors.New("a command is required")
+	saved, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load context: %w", err)
 	}
-	base := *server
-	if base == "" {
-		base = os.Getenv("AURORA_DIST")
-	}
-	if base == "" {
-		base = "http://127.0.0.1:8080"
-	}
-	app := &app{client: client.New(base), out: out}
+	a := &app{ctx: saved, out: out}
 
-	command, rest := rest[0], rest[1:]
+	command, rest := args[0], args[1:]
 	switch command {
-	case "sessions":
-		return app.sessions(ctx)
+	case "context":
+		return a.context(ctx, rest)
+	case "use":
+		return a.use(ctx, rest)
 	case "new":
-		return app.newSession(ctx, rest)
+		return a.newSession(ctx, rest)
+	case "sessions":
+		return a.sessions(ctx, rest)
 	case "send":
-		return app.send(ctx, rest)
+		return a.send(ctx, rest)
+	case "ps", "processes":
+		return a.ps(ctx, rest)
+	case "log":
+		return a.log(ctx, rest)
+	case "graph":
+		return a.graph(ctx, rest)
 	case "watch":
-		return app.watch(ctx, rest)
-	case "session":
-		return app.session(ctx, rest)
-	case "proc":
-		return app.proc(ctx, rest)
-	case "journal":
-		return app.journal(ctx, rest)
+		return a.watch(ctx, rest)
+	case "proc", "status":
+		return a.proc(ctx, rest)
+	case "journal", "j":
+		return a.journal(ctx, rest)
 	case "tasks":
-		return app.tasks(ctx, rest)
+		return a.tasks(ctx, rest)
 	case "approve":
-		return app.resolveShorthand(ctx, rest, "approved")
+		return a.resolveShorthand(ctx, rest, "approved")
 	case "deny":
-		return app.resolveShorthand(ctx, rest, "denied")
+		return a.resolveShorthand(ctx, rest, "denied")
 	case "resolve":
-		return app.resolve(ctx, rest)
+		return a.resolve(ctx, rest)
 	case "stop":
-		return app.stop(ctx, rest)
+		return a.stop(ctx, rest)
 	case "retry":
-		return app.retry(ctx, rest)
+		return a.retry(ctx, rest)
 	case "programs":
-		return app.programs(ctx)
+		return a.programs(ctx, rest)
 	case "reload":
-		return app.reload(ctx)
+		return a.reload(ctx, rest)
 	case "retention":
-		return app.retention(ctx)
+		return a.retention(ctx, rest)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return nil
@@ -114,20 +120,215 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 }
 
 type app struct {
-	client *client.Client
+	ctx    config.Context
 	out    io.Writer
+	client *client.Client
 }
 
 func (a *app) printf(format string, args ...any) {
 	fmt.Fprintf(a.out, format+"\n", args...)
 }
 
-// --- sessions ---
+// shared holds the flags every command accepts.
+type shared struct {
+	server  *string
+	session *string
+	process *string
+	output  *string
+}
 
-func (a *app) sessions(ctx context.Context) error {
+// flags builds a command flagset carrying the shared overrides; the caller
+// registers command-specific flags on the returned set before parsing.
+func (a *app) flags(name string) (*flag.FlagSet, *shared) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(a.out)
+	s := &shared{
+		server:  fs.String("server", "", "aurora-dist base URL (overrides the saved context)"),
+		session: fs.String("s", "", "session id (overrides the current session)"),
+		process: fs.String("p", "", "process id (overrides the current process)"),
+		output:  fs.String("o", "", "output format: json"),
+	}
+	return fs, s
+}
+
+// bind parses a command's flags — interleaved with positionals, so flags may
+// appear before or after the message/id (stdlib flag stops at the first
+// positional; this permutes) — then resolves and attaches the API client.
+func (a *app) bind(fs *flag.FlagSet, s *shared, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+	server := *s.server
+	if server == "" {
+		server = a.ctx.Server
+	}
+	if server == "" {
+		server = os.Getenv("AURORA_DIST")
+	}
+	if server == "" {
+		server = "http://127.0.0.1:8080"
+	}
+	a.client = client.New(server)
+	return positional, nil
+}
+
+// resolveSession returns the session to act on: the -s override, else the
+// saved current session.
+func (a *app) resolveSession(s *shared) (string, error) {
+	if *s.session != "" {
+		return *s.session, nil
+	}
+	if a.ctx.Session != "" {
+		return a.ctx.Session, nil
+	}
+	return "", errors.New("no current session; run `aurora-cli use <session>` or `aurora-cli new`")
+}
+
+// resolveProcess returns the process to act on: the -p override, else the
+// saved current process, else the current session's active or most-recent
+// process.
+func (a *app) resolveProcess(ctx context.Context, s *shared) (string, error) {
+	if *s.process != "" {
+		return *s.process, nil
+	}
+	if a.ctx.Process != "" {
+		return a.ctx.Process, nil
+	}
+	sessionID, err := a.resolveSession(s)
+	if err != nil {
+		return "", errors.New("no current process; run `aurora-cli send <message>` or pass -p")
+	}
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if log.Session.ActiveProcessID != "" {
+		return log.Session.ActiveProcessID, nil
+	}
+	if n := len(log.Processes); n > 0 {
+		return log.Processes[n-1].ID, nil
+	}
+	return "", errors.New("the current session has no processes yet")
+}
+
+func (a *app) emitJSON(value any) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	a.printf("%s", raw)
+	return nil
+}
+
+// --- context ---
+
+func (a *app) context(ctx context.Context, args []string) error {
+	fs, s := a.flags("context")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
+		return err
+	}
+	_ = rest
+	if *s.output == "json" {
+		return a.emitJSON(a.ctx)
+	}
+	server := a.client.BaseURL
+	a.printf("server   %s", server)
+	if a.ctx.Session == "" {
+		a.printf("session  (none — run `aurora-cli use <session>` or `aurora-cli new`)")
+		return nil
+	}
+	title := ""
+	if log, err := a.client.Session(ctx, a.ctx.Session); err == nil {
+		title = "  " + quoteTitle(log.Session.Title)
+	}
+	a.printf("session  %s%s", a.ctx.Session, title)
+	if a.ctx.Process != "" {
+		a.printf("process  %s", a.ctx.Process)
+	} else {
+		a.printf("process  (none — defaults to the session's active process)")
+	}
+	return nil
+}
+
+func (a *app) use(ctx context.Context, args []string) error {
+	fs, s := a.flags("use")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
+		return err
+	}
+	changed := false
+	if *s.server != "" {
+		a.ctx.Server = *s.server
+		changed = true
+	}
+	if len(rest) > 0 {
+		sessionID := rest[0]
+		log, err := a.client.Session(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("session %s: %w", sessionID, err)
+		}
+		a.ctx.Session = sessionID
+		// Point the current process at the session's active one, if any.
+		a.ctx.Process = log.Session.ActiveProcessID
+		changed = true
+		a.printf("switched to session %s %s", sessionID, quoteTitle(log.Session.Title))
+	}
+	if !changed {
+		return errors.New("nothing to set: pass a session id and/or -server")
+	}
+	if err := config.Save(a.ctx); err != nil {
+		return err
+	}
+	if *s.server != "" && len(rest) == 0 {
+		a.printf("server set to %s", a.ctx.Server)
+	}
+	return nil
+}
+
+func (a *app) newSession(ctx context.Context, args []string) error {
+	fs, s := a.flags("new")
+	var tags tagFlags
+	fs.Var(&tags, "tag", "k=v tag (repeatable)")
+	keep := fs.Bool("keep", false, "do not switch the current context to the new session")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
+	log, err := a.client.CreateSession(ctx, tags.values)
+	if err != nil {
+		return err
+	}
+	if !*keep {
+		a.ctx.Session = log.Session.ID
+		a.ctx.Process = ""
+		if err := config.Save(a.ctx); err != nil {
+			return err
+		}
+	}
+	a.printf("%s", log.Session.ID)
+	return nil
+}
+
+func (a *app) sessions(ctx context.Context, args []string) error {
+	fs, s := a.flags("sessions")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
 	sessions, err := a.client.ListSessions(ctx)
 	if err != nil {
 		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(sessions)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].CreatedAt.Before(sessions[j].CreatedAt) })
 	if len(sessions) == 0 {
@@ -135,54 +336,11 @@ func (a *app) sessions(ctx context.Context) error {
 		return nil
 	}
 	for _, session := range sessions {
-		active := ""
-		if session.ActiveProcessID != "" {
-			active = "  active " + session.ActiveProcessID
+		marker := " "
+		if session.ID == a.ctx.Session {
+			marker = "*"
 		}
-		a.printf("%s  %-40q  %d processes%s", session.ID, session.Title, session.ProcessCount, active)
-	}
-	return nil
-}
-
-func (a *app) newSession(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("new", flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	var tags tagFlags
-	flags.Var(&tags, "tag", "k=v tag (repeatable)")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	session, err := a.client.CreateSession(ctx, tags.values)
-	if err != nil {
-		return err
-	}
-	a.printf("%s", session.ID)
-	return nil
-}
-
-func (a *app) session(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: session <session-id>")
-	}
-	session, err := a.client.GetSession(ctx, args[0])
-	if err != nil {
-		return err
-	}
-	a.printf("%s  %q", session.ID, session.Title)
-	for key, value := range session.Tags {
-		a.printf("  tag %s=%s", key, value)
-	}
-	if len(session.History) > 0 {
-		a.printf("history:")
-		for _, message := range session.History {
-			a.printf("  %s: %s", message.Role, message.Content)
-		}
-	}
-	if len(session.Processes) > 0 {
-		a.printf("processes:")
-		for _, process := range session.Processes {
-			a.printf("  %s", processLine(process))
-		}
+		a.printf("%s %s  %-40s  %d processes", marker, session.ID, truncate(session.Title, 40), session.ProcessCount)
 	}
 	return nil
 }
@@ -190,18 +348,19 @@ func (a *app) session(ctx context.Context, args []string) error {
 // --- processes ---
 
 func (a *app) send(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("send", flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	manifestPath := flags.String("manifest", "", "path to a manifest JSON file")
-	detach := flags.Bool("detach", false, "print the process id and exit instead of following")
-	// Flags may follow the positional args; parse the tail.
-	if len(args) < 2 {
-		return errors.New("usage: send <session-id|new> <message> [-manifest file.json] [-detach]")
-	}
-	sessionID, message := args[0], args[1]
-	if err := flags.Parse(args[2:]); err != nil {
+	fs, s := a.flags("send")
+	manifestPath := fs.String("manifest", "", "path to a manifest JSON file")
+	detach := fs.Bool("detach", false, "print the process id and exit instead of following")
+	newSession := fs.Bool("new", false, "create a fresh session and switch to it first")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
 		return err
 	}
+	if len(rest) == 0 {
+		return errors.New("usage: send <message> [-manifest file.json] [-new] [-detach]")
+	}
+	message := strings.Join(rest, " ")
+
 	var manifest json.RawMessage
 	if *manifestPath != "" {
 		raw, err := os.ReadFile(*manifestPath)
@@ -210,13 +369,21 @@ func (a *app) send(ctx context.Context, args []string) error {
 		}
 		manifest = raw
 	}
-	if sessionID == "new" {
-		session, err := a.client.CreateSession(ctx, nil)
+
+	var sessionID string
+	if *newSession {
+		log, err := a.client.CreateSession(ctx, nil)
 		if err != nil {
 			return err
 		}
-		sessionID = session.ID
+		sessionID = log.Session.ID
+		a.ctx.Session = sessionID
 		a.printf("session %s", sessionID)
+	} else {
+		sessionID, err = a.resolveSession(s)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Subscribe before creating the process so no event is missed.
@@ -224,7 +391,6 @@ func (a *app) send(ctx context.Context, args []string) error {
 	if !*detach {
 		streamCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		var err error
 		events, err = a.client.SessionEvents(streamCtx, sessionID)
 		if err != nil {
 			return err
@@ -232,6 +398,11 @@ func (a *app) send(ctx context.Context, args []string) error {
 	}
 	process, err := a.client.CreateProcess(ctx, sessionID, message, manifest)
 	if err != nil {
+		return err
+	}
+	a.ctx.Session = sessionID
+	a.ctx.Process = process.ID
+	if err := config.Save(a.ctx); err != nil {
 		return err
 	}
 	a.printf("process %s", process.ID)
@@ -312,48 +483,54 @@ func (a *app) renderFollow(event client.Event, processID string) (bool, error) {
 	return false, nil
 }
 
-func (a *app) watch(ctx context.Context, args []string) error {
-	if len(args) >= 1 {
-		events, err := a.client.SessionEvents(ctx, args[0])
-		if err != nil {
-			return err
-		}
-		for event := range events {
-			a.printf("%s", renderEvent(event.Type, event.Data))
-		}
-		return nil
-	}
-	events, err := a.client.Firehose(ctx, 0)
+func (a *app) ps(ctx context.Context, args []string) error {
+	fs, s := a.flags("ps")
+	rest, err := a.bind(fs, s, args)
 	if err != nil {
 		return err
 	}
-	for event := range events {
-		var frame struct {
-			Seq       uint64          `json:"seq"`
-			SessionID string          `json:"session_id"`
-			Type      string          `json:"type"`
-			Data      json.RawMessage `json:"data"`
+	_ = rest
+	sessionID, err := a.resolveSession(s)
+	if err != nil {
+		return err
+	}
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(log.Processes)
+	}
+	if len(log.Processes) == 0 {
+		a.printf("no processes")
+		return nil
+	}
+	for _, process := range log.Processes {
+		marker := " "
+		if process.ID == a.ctx.Process {
+			marker = "*"
 		}
-		if event.Type == "snapshot" {
-			a.printf("[snapshot] %s", compact(event.Data, 160))
-			continue
-		}
-		if err := json.Unmarshal(event.Data, &frame); err != nil {
-			a.printf("[%s] %s", event.Type, compact(event.Data, 160))
-			continue
-		}
-		a.printf("#%d %s %s", frame.Seq, frame.SessionID, renderEvent(frame.Type, frame.Data))
+		a.printf("%s %s", marker, processLine(process.Process))
 	}
 	return nil
 }
 
 func (a *app) proc(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: proc <process-id>")
-	}
-	process, err := a.client.GetProcess(ctx, args[0])
+	fs, s := a.flags("proc")
+	rest, err := a.bind(fs, s, args)
 	if err != nil {
 		return err
+	}
+	processID, err := a.processArg(ctx, s, rest)
+	if err != nil {
+		return err
+	}
+	process, err := a.client.GetProcess(ctx, processID)
+	if err != nil {
+		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(process)
 	}
 	a.printf("%s", processLine(process))
 	a.printf("  session   %s", process.SessionID)
@@ -369,54 +546,216 @@ func (a *app) proc(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a *app) journal(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("journal", flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	revisions := flags.Bool("revisions", false, "render every revision")
-	full := flags.Bool("full", false, "do not truncate args/results")
-	if len(args) < 1 {
-		return errors.New("usage: journal <process-id> [-revisions] [-full]")
-	}
-	if err := flags.Parse(args[1:]); err != nil {
+// --- reads (rendered from the session log) ---
+
+func (a *app) log(ctx context.Context, args []string) error {
+	fs, s := a.flags("log")
+	allRevisions := fs.Bool("all-revisions", false, "show every revision, not the effective current journal")
+	if _, err := a.bind(fs, s, args); err != nil {
 		return err
 	}
-	limit := 96
-	if *full {
-		limit = 0
-	}
-	if *revisions {
-		byRevision, err := a.client.JournalRevisions(ctx, args[0])
-		if err != nil {
-			return err
-		}
-		revs := make([]uint64, 0, len(byRevision))
-		for rev := range byRevision {
-			revs = append(revs, rev)
-		}
-		sort.Slice(revs, func(i, j int) bool { return revs[i] < revs[j] })
-		for _, rev := range revs {
-			a.printf("revision %d:", rev)
-			for _, entry := range byRevision[rev] {
-				a.printf("  %s", renderEntry(entry, limit))
-			}
-		}
-		return nil
-	}
-	entries, err := a.client.Journal(ctx, args[0])
+	sessionID, err := a.resolveSession(s)
 	if err != nil {
 		return err
 	}
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(log)
+	}
+	a.printf("session %s  %s", log.Session.ID, truncate(log.Session.Title, 60))
+	if len(log.History) > 0 {
+		a.printf("history:")
+		for _, message := range log.History {
+			a.printf("  %s: %s", message.Role, message.Content)
+		}
+	}
+	for _, process := range log.Processes {
+		a.printf("")
+		a.printf("%s", processLine(process.Process))
+		a.renderJournal(process, *allRevisions)
+	}
+	return nil
+}
+
+func (a *app) journal(ctx context.Context, args []string) error {
+	fs, s := a.flags("journal")
+	allRevisions := fs.Bool("all-revisions", false, "show every revision, not the effective current journal")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
+		return err
+	}
+	processID, err := a.processArg(ctx, s, rest)
+	if err != nil {
+		return err
+	}
+	process, err := a.findProcessLog(ctx, s, processID)
+	if err != nil {
+		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(process)
+	}
+	a.renderJournal(process, *allRevisions)
+	return nil
+}
+
+func (a *app) graph(ctx context.Context, args []string) error {
+	fs, s := a.flags("graph")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
+	sessionID, err := a.resolveSession(s)
+	if err != nil {
+		return err
+	}
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(log.Processes)
+	}
+	byID := make(map[string]client.ProcessLog, len(log.Processes))
+	for _, process := range log.Processes {
+		byID[process.ID] = process
+	}
+	for _, process := range log.Processes {
+		if process.ParentProcessID == "" {
+			a.renderGraphNode(byID, process.ID, 0)
+		}
+	}
+	return nil
+}
+
+func (a *app) renderGraphNode(byID map[string]client.ProcessLog, id string, depth int) {
+	process, ok := byID[id]
+	if !ok {
+		return
+	}
+	indent := strings.Repeat("  ", depth)
+	label := process.Status
+	if process.Answer != "" {
+		label += " → " + truncate(process.Answer, 40)
+	} else if process.Error != "" {
+		label += " ! " + truncate(process.Error, 40)
+	}
+	a.printf("%s%s  %-16s %s", indent, id, label, truncate(process.Message, 40))
+	for _, child := range process.ChildProcessIDs {
+		a.renderGraphNode(byID, child, depth+1)
+	}
+}
+
+func (a *app) renderJournal(process client.ProcessLog, allRevisions bool) {
+	if allRevisions {
+		byRevision := map[uint64][]client.JournalEntry{}
+		revisions := []uint64{}
+		for _, entry := range process.Entries {
+			if _, ok := byRevision[entry.Revision]; !ok {
+				revisions = append(revisions, entry.Revision)
+			}
+			byRevision[entry.Revision] = append(byRevision[entry.Revision], entry)
+		}
+		sort.Slice(revisions, func(i, j int) bool { return revisions[i] < revisions[j] })
+		for _, revision := range revisions {
+			a.printf("  revision %d:", revision)
+			entries := byRevision[revision]
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Position < entries[j].Position })
+			for _, entry := range entries {
+				a.printf("    %s", renderEntry(entry, 96))
+			}
+		}
+		return
+	}
+	for _, entry := range effectiveEntries(process.Entries, process.Revision) {
+		a.printf("  %s", renderEntry(entry, 96))
+	}
+}
+
+// effectiveEntries is the current journal a process replays: for each
+// position, the entry with the highest revision ≤ the process's current
+// revision (copy-on-write forks leave earlier-revision entries in the shared
+// prefix). This is the grouping the server used to compute; it is derivable
+// from the flat entry list the session log carries.
+func effectiveEntries(entries []client.JournalEntry, maxRevision uint64) []client.JournalEntry {
+	best := map[int]client.JournalEntry{}
 	for _, entry := range entries {
-		a.printf("%s", renderEntry(entry, limit))
+		if entry.Revision > maxRevision {
+			continue
+		}
+		if current, ok := best[entry.Position]; !ok || entry.Revision > current.Revision {
+			best[entry.Position] = entry
+		}
+	}
+	positions := make([]int, 0, len(best))
+	for position := range best {
+		positions = append(positions, position)
+	}
+	sort.Ints(positions)
+	out := make([]client.JournalEntry, 0, len(positions))
+	for _, position := range positions {
+		out = append(out, best[position])
+	}
+	return out
+}
+
+func (a *app) watch(ctx context.Context, args []string) error {
+	fs, s := a.flags("watch")
+	firehose := fs.Bool("firehose", false, "stream the whole tenant instead of the current session")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
+	if *firehose {
+		events, err := a.client.Firehose(ctx, 0)
+		if err != nil {
+			return err
+		}
+		for event := range events {
+			if event.Type == "snapshot" {
+				a.printf("[snapshot] %s", compact(event.Data, 160))
+				continue
+			}
+			var frame struct {
+				Seq       uint64          `json:"seq"`
+				SessionID string          `json:"session_id"`
+				Type      string          `json:"type"`
+				Data      json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(event.Data, &frame); err != nil {
+				a.printf("[%s] %s", event.Type, compact(event.Data, 160))
+				continue
+			}
+			a.printf("#%d %s %s", frame.Seq, frame.SessionID, renderEvent(frame.Type, frame.Data))
+		}
+		return nil
+	}
+	sessionID, err := a.resolveSession(s)
+	if err != nil {
+		return err
+	}
+	events, err := a.client.SessionEvents(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for event := range events {
+		a.printf("%s", renderEvent(event.Type, event.Data))
 	}
 	return nil
 }
 
 func (a *app) stop(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: stop <process-id>")
+	fs, s := a.flags("stop")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
+		return err
 	}
-	process, err := a.client.Stop(ctx, args[0])
+	processID, err := a.processArg(ctx, s, rest)
+	if err != nil {
+		return err
+	}
+	process, err := a.client.Stop(ctx, processID)
 	if err != nil {
 		return err
 	}
@@ -425,20 +764,21 @@ func (a *app) stop(ctx context.Context, args []string) error {
 }
 
 func (a *app) retry(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("retry", flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	restart := flags.Bool("restart", false, "restart from scratch instead of resuming")
-	if len(args) < 1 {
-		return errors.New("usage: retry <process-id> [-restart]")
+	fs, s := a.flags("retry")
+	restart := fs.Bool("restart", false, "restart from scratch instead of resuming")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
+		return err
 	}
-	if err := flags.Parse(args[1:]); err != nil {
+	processID, err := a.processArg(ctx, s, rest)
+	if err != nil {
 		return err
 	}
 	mode := "resume"
 	if *restart {
 		mode = "restart"
 	}
-	process, err := a.client.Retry(ctx, args[0], mode)
+	process, err := a.client.Retry(ctx, processID, mode)
 	if err != nil {
 		return err
 	}
@@ -449,12 +789,35 @@ func (a *app) retry(ctx context.Context, args []string) error {
 // --- tasks ---
 
 func (a *app) tasks(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: tasks <process-id>")
-	}
-	tasks, err := a.client.Tasks(ctx, args[0])
+	fs, s := a.flags("tasks")
+	rest, err := a.bind(fs, s, args)
 	if err != nil {
 		return err
+	}
+	sessionID, err := a.resolveSession(s)
+	if err != nil {
+		return err
+	}
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	// -p (or a positional) narrows to one process; otherwise every process's
+	// tasks in the session are shown, which is what a human scanning for
+	// something to approve wants.
+	filter := *s.process
+	if filter == "" && len(rest) > 0 {
+		filter = rest[0]
+	}
+	var tasks []client.Task
+	for _, process := range log.Processes {
+		if filter != "" && process.ID != filter {
+			continue
+		}
+		tasks = append(tasks, process.Tasks...)
+	}
+	if *s.output == "json" {
+		return a.emitJSON(tasks)
 	}
 	if len(tasks) == 0 {
 		a.printf("no tasks")
@@ -473,44 +836,52 @@ func (a *app) tasks(ctx context.Context, args []string) error {
 	return nil
 }
 
-// findTask scans sessions → processes → tasks for a task id. The API is
-// process-scoped by design; the trusted local terminal may roam the tenant.
-func (a *app) findTask(ctx context.Context, taskID string) (client.Task, error) {
+// findTask locates a task by id, preferring the current session's log and
+// falling back to a tenant-wide scan (the trusted local terminal may roam).
+func (a *app) findTask(ctx context.Context, s *shared, taskID string) (client.Task, error) {
+	if sessionID, err := a.resolveSession(s); err == nil {
+		if task, ok := a.taskInSession(ctx, sessionID, taskID); ok {
+			return task, nil
+		}
+	}
 	sessions, err := a.client.ListSessions(ctx)
 	if err != nil {
 		return client.Task{}, err
 	}
 	for _, summary := range sessions {
-		session, err := a.client.GetSession(ctx, summary.ID)
-		if err != nil {
-			continue
-		}
-		for _, process := range session.Processes {
-			tasks, err := a.client.Tasks(ctx, process.ID)
-			if err != nil {
-				continue
-			}
-			for _, task := range tasks {
-				if task.ID == taskID {
-					return task, nil
-				}
-			}
+		if task, ok := a.taskInSession(ctx, summary.ID, taskID); ok {
+			return task, nil
 		}
 	}
 	return client.Task{}, fmt.Errorf("task %s not found", taskID)
 }
 
-func (a *app) resolveShorthand(ctx context.Context, args []string, decision string) error {
-	flags := flag.NewFlagSet(decision, flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	reason := flags.String("reason", "", "resolution reason")
-	if len(args) < 1 {
-		return fmt.Errorf("usage: %s <task-id> [-reason text]", map[string]string{"approved": "approve", "denied": "deny"}[decision])
+func (a *app) taskInSession(ctx context.Context, sessionID, taskID string) (client.Task, bool) {
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return client.Task{}, false
 	}
-	if err := flags.Parse(args[1:]); err != nil {
+	for _, process := range log.Processes {
+		for _, task := range process.Tasks {
+			if task.ID == taskID {
+				return task, true
+			}
+		}
+	}
+	return client.Task{}, false
+}
+
+func (a *app) resolveShorthand(ctx context.Context, args []string, decision string) error {
+	fs, s := a.flags(decision)
+	reason := fs.String("reason", "", "resolution reason")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
 		return err
 	}
-	task, err := a.findTask(ctx, args[0])
+	if len(rest) < 1 {
+		return fmt.Errorf("usage: %s <task-id> [-reason text]", map[string]string{"approved": "approve", "denied": "deny"}[decision])
+	}
+	task, err := a.findTask(ctx, s, rest[0])
 	if err != nil {
 		return err
 	}
@@ -527,24 +898,24 @@ func (a *app) resolveShorthand(ctx context.Context, args []string, decision stri
 }
 
 func (a *app) resolve(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("resolve", flag.ContinueOnError)
-	flags.SetOutput(a.out)
-	decision := flags.String("decision", "", "approved|completed|failed|denied|cancelled")
-	data := flags.String("data", "", "resolution data (JSON, for completed)")
-	reason := flags.String("reason", "", "resolution reason")
-	token := flags.String("token", "", "resolution token (default: looked up via the API)")
-	if len(args) < 1 {
-		return errors.New("usage: resolve <task-id> -decision d [-data json] [-reason text] [-token t]")
-	}
-	if err := flags.Parse(args[1:]); err != nil {
+	fs, s := a.flags("resolve")
+	decision := fs.String("decision", "", "approved|completed|failed|denied|cancelled")
+	data := fs.String("data", "", "resolution data (JSON, for completed)")
+	reason := fs.String("reason", "", "resolution reason")
+	token := fs.String("token", "", "resolution token (default: looked up via the API)")
+	rest, err := a.bind(fs, s, args)
+	if err != nil {
 		return err
+	}
+	if len(rest) < 1 {
+		return errors.New("usage: resolve <task-id> -decision d [-data json] [-reason text] [-token t]")
 	}
 	if *decision == "" {
 		return errors.New("-decision is required")
 	}
 	resolutionToken := *token
 	if resolutionToken == "" {
-		task, err := a.findTask(ctx, args[0])
+		task, err := a.findTask(ctx, s, rest[0])
 		if err != nil {
 			return err
 		}
@@ -554,7 +925,7 @@ func (a *app) resolve(ctx context.Context, args []string) error {
 	if *data != "" {
 		resolution.Data = json.RawMessage(*data)
 	}
-	resolved, err := a.client.ResolveTask(ctx, args[0], resolutionToken, resolution)
+	resolved, err := a.client.ResolveTask(ctx, rest[0], resolutionToken, resolution)
 	if err != nil {
 		return err
 	}
@@ -564,10 +935,17 @@ func (a *app) resolve(ctx context.Context, args []string) error {
 
 // --- programs ---
 
-func (a *app) programs(ctx context.Context) error {
+func (a *app) programs(ctx context.Context, args []string) error {
+	fs, s := a.flags("programs")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
 	programs, err := a.client.Programs(ctx)
 	if err != nil {
 		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(programs)
 	}
 	if len(programs) == 0 {
 		a.printf("no programs registered")
@@ -579,7 +957,11 @@ func (a *app) programs(ctx context.Context) error {
 	return nil
 }
 
-func (a *app) reload(ctx context.Context) error {
+func (a *app) reload(ctx context.Context, args []string) error {
+	fs, s := a.flags("reload")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
 	programs, err := a.client.ReloadPrograms(ctx)
 	if err != nil {
 		return err
@@ -591,10 +973,17 @@ func (a *app) reload(ctx context.Context) error {
 	return nil
 }
 
-func (a *app) retention(ctx context.Context) error {
+func (a *app) retention(ctx context.Context, args []string) error {
+	fs, s := a.flags("retention")
+	if _, err := a.bind(fs, s, args); err != nil {
+		return err
+	}
 	refs, err := a.client.Retention(ctx)
 	if err != nil {
 		return err
+	}
+	if *s.output == "json" {
+		return a.emitJSON(refs)
 	}
 	for _, ref := range refs {
 		state := "decommissionable"
@@ -610,7 +999,53 @@ func (a *app) retention(ctx context.Context) error {
 	return nil
 }
 
-// --- rendering helpers ---
+// --- resolution + rendering helpers ---
+
+// processArg resolves a process for a command: a positional id, else -p, else
+// the saved current process, else the session's active/most-recent process.
+func (a *app) processArg(ctx context.Context, s *shared, positional []string) (string, error) {
+	if len(positional) > 0 {
+		return positional[0], nil
+	}
+	return a.resolveProcess(ctx, s)
+}
+
+// findProcessLog fetches one process's ProcessLog out of its session log. It
+// tries the selected/current session first, then learns the process's own
+// session from a cheap snapshot — so `-p` may name a process anywhere.
+func (a *app) findProcessLog(ctx context.Context, s *shared, processID string) (client.ProcessLog, error) {
+	tried := map[string]bool{}
+	lookup := func(sessionID string) (client.ProcessLog, bool) {
+		if sessionID == "" || tried[sessionID] {
+			return client.ProcessLog{}, false
+		}
+		tried[sessionID] = true
+		log, err := a.client.Session(ctx, sessionID)
+		if err != nil {
+			return client.ProcessLog{}, false
+		}
+		for _, process := range log.Processes {
+			if process.ID == processID {
+				return process, true
+			}
+		}
+		return client.ProcessLog{}, false
+	}
+	if process, ok := lookup(*s.session); ok {
+		return process, nil
+	}
+	if process, ok := lookup(a.ctx.Session); ok {
+		return process, nil
+	}
+	snapshot, err := a.client.GetProcess(ctx, processID)
+	if err != nil {
+		return client.ProcessLog{}, err
+	}
+	if process, ok := lookup(snapshot.SessionID); ok {
+		return process, nil
+	}
+	return client.ProcessLog{}, fmt.Errorf("process %s not found", processID)
+}
 
 func processLine(process client.Process) string {
 	extra := ""
@@ -672,6 +1107,14 @@ func truncate(s string, limit int) string {
 		return s
 	}
 	return string(runes[:limit]) + "…"
+}
+
+// quoteTitle quotes a title for display, keeping it on one line.
+func quoteTitle(title string) string {
+	if title == "" {
+		return ""
+	}
+	return "\"" + strings.ReplaceAll(title, "\n", " ") + "\""
 }
 
 // tagFlags collects repeated -tag k=v flags.
