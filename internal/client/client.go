@@ -58,6 +58,8 @@ type Process struct {
 	JournalLength int             `json:"journal_length"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	StartedAt     *time.Time      `json:"started_at,omitempty"`
+	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
 	ProgramDigest string          `json:"program_digest"`
 	Manifest      json.RawMessage `json:"manifest,omitempty"`
 }
@@ -168,6 +170,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return err
 	}
 	if resp.StatusCode >= 300 {
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Error != "" {
+			return &APIError{Status: resp.StatusCode, Code: body.Code, Message: body.Error}
+		}
 		return fmt.Errorf("%s %s: %s (%s)", method, path, resp.Status, strings.TrimSpace(string(raw)))
 	}
 	if out == nil {
@@ -175,6 +184,16 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	return json.Unmarshal(raw, out)
 }
+
+// APIError is a structured {error, code} failure from the /v1 API. Callers can
+// branch on Code (e.g. "conflict", "not_found") instead of matching prose.
+type APIError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *APIError) Error() string { return e.Message }
 
 func (c *Client) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	var out []SessionSummary
