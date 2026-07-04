@@ -418,7 +418,7 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		case process.Status == "interrupted":
 			return fmt.Errorf("process interrupted: %s", process.Error)
 		case process.Parked() && !hinted:
-			a.printf("⏸ %s — resolve any pending task with `tasks`/`approve`; still following", process.Status)
+			a.printf("⏸ %s%s; still following", process.Status, a.parkHint(ctx, process))
 			hinted = true
 		}
 		select {
@@ -427,6 +427,31 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
+}
+
+// parkHint says what a parked process actually waits on: a timer (it fires on
+// its own — a nap, or an abort-retry) needs nothing, anything else needs a
+// human resolution.
+func (a *app) parkHint(ctx context.Context, process client.Process) string {
+	log, err := a.client.Session(ctx, process.SessionID)
+	if err != nil {
+		return ""
+	}
+	for _, candidate := range log.Processes {
+		if candidate.ID != process.ID {
+			continue
+		}
+		for _, task := range candidate.Tasks {
+			if task.State != "pending" {
+				continue
+			}
+			if task.Syscall.Name != "timer.set" {
+				return fmt.Sprintf(" — task %s awaits resolution (`approve %s` or `deny`)", task.ID, task.ID)
+			}
+		}
+		return " — waiting on a timer; it fires on its own"
+	}
+	return ""
 }
 
 func (a *app) ps(ctx context.Context, args []string) error {
