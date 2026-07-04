@@ -18,6 +18,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aurora-capcompute/aurora-cli/internal/client"
 	"github.com/aurora-capcompute/aurora-cli/internal/config"
@@ -35,11 +36,10 @@ Context (kubectl-style; saved so you don't retype ids):
 
 Work in the current session:
   send <message> [-manifest f] [-new] [-detach]
-                                 start a process and follow it to its answer
+                                 start a process and poll it to its answer
   ps                             list the session's processes
   log [--all-revisions]          the whole session log (every process)
   graph                          the delegation call-graph tree
-  watch [--firehose]             stream the session (or the tenant firehose)
 
 Work on the current process (override with -p):
   proc                           show one process's status
@@ -50,9 +50,6 @@ Work on the current process (override with -p):
   resolve <task> -decision d [-data json] [-reason text] [-token t]
   stop                           stop the process
   retry [-restart]               resume (default) or restart the process
-
-Programs:
-  programs · reload · retention
 
 The server resolves from -server, else the saved context, else $AURORA_DIST,
 else http://127.0.0.1:8080. -o json prints the raw payload instead of a table.`
@@ -86,8 +83,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return a.log(ctx, rest)
 	case "graph":
 		return a.graph(ctx, rest)
-	case "watch":
-		return a.watch(ctx, rest)
 	case "proc", "status":
 		return a.proc(ctx, rest)
 	case "journal", "j":
@@ -104,12 +99,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return a.stop(ctx, rest)
 	case "retry":
 		return a.retry(ctx, rest)
-	case "programs":
-		return a.programs(ctx, rest)
-	case "reload":
-		return a.reload(ctx, rest)
-	case "retention":
-		return a.retention(ctx, rest)
 	case "help", "-h", "--help":
 		fmt.Fprintln(out, usage)
 		return nil
@@ -386,16 +375,6 @@ func (a *app) send(ctx context.Context, args []string) error {
 		}
 	}
 
-	// Subscribe before creating the process so no event is missed.
-	var events <-chan client.Event
-	if !*detach {
-		streamCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		events, err = a.client.SessionEvents(streamCtx, sessionID)
-		if err != nil {
-			return err
-		}
-	}
 	process, err := a.client.CreateProcess(ctx, sessionID, message, manifest)
 	if err != nil {
 		return err
@@ -409,78 +388,42 @@ func (a *app) send(ctx context.Context, args []string) error {
 	if *detach {
 		return nil
 	}
-	return a.follow(ctx, events, process.ID)
+	return a.pollToAnswer(ctx, process.ID)
 }
 
-// follow renders a session stream until the given process reaches a terminal
-// state. A parked process keeps the stream open — approvals and timers resume
-// it out-of-band — but pending tasks are surfaced with resolution hints.
-func (a *app) follow(ctx context.Context, events <-chan client.Event, processID string) error {
+// pollToAnswer polls the process's status until it reaches a terminal state,
+// printing the answer (or the failure). A process that parks on a task — an
+// approval or a timer — keeps being polled: a timer resolves itself and an
+// approval is resolved out-of-band, so a hint is printed once and following
+// continues until the process finishes.
+func (a *app) pollToAnswer(ctx context.Context, processID string) error {
+	hinted := false
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case event, ok := <-events:
-			if !ok {
-				return errors.New("event stream closed")
-			}
-			done, err := a.renderFollow(event, processID)
-			if err != nil {
-				return err
-			}
-			if done {
-				return nil
-			}
-		}
-	}
-}
-
-func (a *app) renderFollow(event client.Event, processID string) (bool, error) {
-	switch event.Type {
-	case "snapshot":
-		return false, nil
-	case "progress":
-		var progress struct {
-			ProcessID string `json:"process_id"`
-			Message   string `json:"message"`
-		}
-		if err := json.Unmarshal(event.Data, &progress); err == nil && progress.ProcessID == processID {
-			a.printf("  · %s", progress.Message)
-		}
-	case "process.updated":
-		var process client.Process
-		if err := json.Unmarshal(event.Data, &process); err != nil || process.ID != processID {
-			return false, nil
+		process, err := a.client.GetProcess(ctx, processID)
+		if err != nil {
+			return err
 		}
 		switch {
 		case process.Status == "completed":
 			a.printf("✔ %s", process.Answer)
-			return true, nil
+			return nil
 		case process.Status == "failed":
-			return true, fmt.Errorf("process failed: %s", process.Error)
+			return fmt.Errorf("process failed: %s", process.Error)
 		case process.Status == "stopped":
 			a.printf("■ stopped")
-			return true, nil
+			return nil
 		case process.Status == "interrupted":
-			return true, fmt.Errorf("process interrupted: %s", process.Error)
-		case process.Parked():
-			a.printf("⏸ %s", process.Status)
+			return fmt.Errorf("process interrupted: %s", process.Error)
+		case process.Parked() && !hinted:
+			a.printf("⏸ %s — resolve any pending task with `tasks`/`approve`; still following", process.Status)
+			hinted = true
 		}
-	case "task.created":
-		var task client.Task
-		if err := json.Unmarshal(event.Data, &task); err == nil && task.ProcessID == processID {
-			a.printf("⏳ task %s: %s", task.ID, task.Summary)
-			if task.Syscall.Name != "timer.set" {
-				a.printf("   resolve with: aurora-cli approve %s   (or deny)", task.ID)
-			}
-		}
-	case "task.updated":
-		var task client.Task
-		if err := json.Unmarshal(event.Data, &task); err == nil && task.ProcessID == processID {
-			a.printf("⏳ task %s → %s", task.ID, task.State)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
 		}
 	}
-	return false, nil
 }
 
 func (a *app) ps(ctx context.Context, args []string) error {
@@ -701,50 +644,6 @@ func effectiveEntries(entries []client.JournalEntry, maxRevision uint64) []clien
 	return out
 }
 
-func (a *app) watch(ctx context.Context, args []string) error {
-	fs, s := a.flags("watch")
-	firehose := fs.Bool("firehose", false, "stream the whole tenant instead of the current session")
-	if _, err := a.bind(fs, s, args); err != nil {
-		return err
-	}
-	if *firehose {
-		events, err := a.client.Firehose(ctx, 0)
-		if err != nil {
-			return err
-		}
-		for event := range events {
-			if event.Type == "snapshot" {
-				a.printf("[snapshot] %s", compact(event.Data, 160))
-				continue
-			}
-			var frame struct {
-				Seq       uint64          `json:"seq"`
-				SessionID string          `json:"session_id"`
-				Type      string          `json:"type"`
-				Data      json.RawMessage `json:"data"`
-			}
-			if err := json.Unmarshal(event.Data, &frame); err != nil {
-				a.printf("[%s] %s", event.Type, compact(event.Data, 160))
-				continue
-			}
-			a.printf("#%d %s %s", frame.Seq, frame.SessionID, renderEvent(frame.Type, frame.Data))
-		}
-		return nil
-	}
-	sessionID, err := a.resolveSession(s)
-	if err != nil {
-		return err
-	}
-	events, err := a.client.SessionEvents(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	for event := range events {
-		a.printf("%s", renderEvent(event.Type, event.Data))
-	}
-	return nil
-}
-
 func (a *app) stop(ctx context.Context, args []string) error {
 	fs, s := a.flags("stop")
 	rest, err := a.bind(fs, s, args)
@@ -933,72 +832,6 @@ func (a *app) resolve(ctx context.Context, args []string) error {
 	return nil
 }
 
-// --- programs ---
-
-func (a *app) programs(ctx context.Context, args []string) error {
-	fs, s := a.flags("programs")
-	if _, err := a.bind(fs, s, args); err != nil {
-		return err
-	}
-	programs, err := a.client.Programs(ctx)
-	if err != nil {
-		return err
-	}
-	if *s.output == "json" {
-		return a.emitJSON(programs)
-	}
-	if len(programs) == 0 {
-		a.printf("no programs registered")
-		return nil
-	}
-	for _, program := range programs {
-		a.printf("%s  %s", program.ID, program.Digest)
-	}
-	return nil
-}
-
-func (a *app) reload(ctx context.Context, args []string) error {
-	fs, s := a.flags("reload")
-	if _, err := a.bind(fs, s, args); err != nil {
-		return err
-	}
-	programs, err := a.client.ReloadPrograms(ctx)
-	if err != nil {
-		return err
-	}
-	a.printf("%d programs registered", len(programs))
-	for _, program := range programs {
-		a.printf("%s  %s", program.ID, program.Digest)
-	}
-	return nil
-}
-
-func (a *app) retention(ctx context.Context, args []string) error {
-	fs, s := a.flags("retention")
-	if _, err := a.bind(fs, s, args); err != nil {
-		return err
-	}
-	refs, err := a.client.Retention(ctx)
-	if err != nil {
-		return err
-	}
-	if *s.output == "json" {
-		return a.emitJSON(refs)
-	}
-	for _, ref := range refs {
-		state := "decommissionable"
-		if !ref.Decommissionable {
-			state = fmt.Sprintf("pinned by %s", strings.Join(ref.Processes, ", "))
-		}
-		programs := strings.Join(ref.Programs, ", ")
-		if programs == "" {
-			programs = "(unregistered)"
-		}
-		a.printf("%s  %s  %s", ref.Digest, programs, state)
-	}
-	return nil
-}
-
 // --- resolution + rendering helpers ---
 
 // processArg resolves a process for a command: a positional id, else -p, else
@@ -1078,10 +911,6 @@ func renderEntry(entry client.JournalEntry, limit int) string {
 		line += "  [" + strings.Join(entry.Outcome.Labels, " ") + "]"
 	}
 	return line
-}
-
-func renderEvent(eventType string, data json.RawMessage) string {
-	return fmt.Sprintf("[%s] %s", eventType, compact(data, 160))
 }
 
 // compact renders raw JSON on one line, truncated to limit runes (0 = no

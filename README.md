@@ -5,7 +5,7 @@ The first Aurora terminal: a CLI binding directly to an
 trusted local single-principal use, no policy layer between. It exists for
 two reasons: to drive an agent from a shell, and to be the **API-completeness
 test** — the client defines its own wire types and consumes only the public
-HTTP+SSE contract, so anything the terminal cannot do is a hole in the API,
+HTTP contract, so anything the terminal cannot do is a hole in the API,
 not a missing import.
 
 It carries a **saved working context** the way kubectl does: the server, the
@@ -25,20 +25,16 @@ Context (saved, so you don't retype ids):
 
 In the current session:
   send <message> [-manifest f] [-new] [-detach]
-                                 start a process and follow it to its answer
+                                 start a process and poll it to its answer
   ps                             list the session's processes
   log [--all-revisions]          the whole session log (every process)
   graph                          the delegation call-graph tree
-  watch [--firehose]             stream the session (or the tenant firehose)
 
 On the current process (override with -p):
   proc · journal [--all-revisions] · tasks
   approve <task> [-reason] · deny <task> [-reason]
   resolve <task> -decision d [-data json] [-reason] [-token t]
   stop · retry [-restart]
-
-Programs:
-  programs · reload · retention
 ```
 
 **One read, rendered here.** Every view — `log`, `journal`, `graph`, `tasks`,
@@ -46,11 +42,11 @@ per-revision — is a rendering of the single `GET /v1/sessions/{id}` payload
 the server returns; the terminal does the grouping. There is no separate
 graph/journal/tasks endpoint on the API.
 
-`send` subscribes to the session's SSE stream before starting the process,
-renders progress reports and pending tasks as they happen (with
-`approve`/`deny` hints), prints the final answer, and remembers the process
-as current. A process parked on a durable task keeps the stream open — a
-timer resumes it by itself, an approval can arrive from another terminal.
+`send` starts the process, then polls its status to completion, prints the
+final answer, and remembers the process as current. A process parked on a
+durable task keeps being polled — a timer resumes it by itself, an approval
+can arrive from another terminal — with a hint to resolve pending tasks via
+`tasks`/`approve`.
 
 Task resolution authenticates with the task's bearer `resolution_token`; the
 CLI looks tokens up through the API (the trusted-client posture) so
@@ -86,6 +82,6 @@ go test -race ./...
 
 The end-to-end tests build the sibling `aurora-dist` binary and the real Rust
 agent program from the sibling `aurora-brains` checkout, then drive the whole
-stack through this CLI — the send/follow loop with a firing timer, and the
+stack through this CLI — the send/poll loop with a firing timer, and the
 approve/deny cycle — skipping when the toolchains or checkouts are absent.
 The module itself is pure stdlib.

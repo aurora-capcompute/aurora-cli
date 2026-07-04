@@ -189,11 +189,6 @@ func TestTerminalEndToEnd(t *testing.T) {
 	server := startDist(t, bin, programsDir, t.TempDir())
 	useContext(t, server)
 
-	// Programs arrived from the registry.
-	if got := run(t, "programs"); !strings.Contains(got, "agent  ") {
-		t.Fatalf("programs = %q", got)
-	}
-
 	// A manifest file, as a user would write one.
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
@@ -210,8 +205,8 @@ func TestTerminalEndToEnd(t *testing.T) {
 	}
 
 	// send -new creates the session, switches context to it, starts the
-	// process, follows the stream through the timer park and fire, and prints
-	// the final answer. Flags after the message exercise interleaved parsing.
+	// process, polls it through the timer park and fire, and prints the final
+	// answer. Flags after the message exercise interleaved parsing.
 	sent := run(t, "send", "-new", "take a nap, then report back", "-manifest", manifestPath)
 	if !strings.Contains(sent, "session ses_") || !strings.Contains(sent, "process proc_") {
 		t.Fatalf("send output missing ids:\n%s", sent)
@@ -252,11 +247,6 @@ func TestTerminalEndToEnd(t *testing.T) {
 	// graph renders the (single-node here) call tree.
 	if got := run(t, "graph"); !strings.Contains(got, "completed") {
 		t.Fatalf("graph = %q", got)
-	}
-
-	// Retention: nothing non-terminal pins the digest anymore.
-	if got := run(t, "retention"); !strings.Contains(got, "decommissionable") {
-		t.Fatalf("retention = %q", got)
 	}
 
 	// sessions marks the current session.
