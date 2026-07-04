@@ -235,7 +235,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	if !strings.Contains(shown, "user: take a nap") || !strings.Contains(shown, "assistant: woke up") {
 		t.Fatalf("log missing history:\n%s", shown)
 	}
-	for _, want := range []string{"agent.input", "openai.chat", "timer.set", "agent.finish"} {
+	for _, want := range []string{"sys.input", "openai.chat", "timer.set", "sys.output"} {
 		if !strings.Contains(shown, want) {
 			t.Fatalf("log missing %s:\n%s", want, shown)
 		}
