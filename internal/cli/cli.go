@@ -367,6 +367,12 @@ func (a *app) send(ctx context.Context, args []string) error {
 		}
 		sessionID = log.Session.ID
 		a.ctx.Session = sessionID
+		a.ctx.Process = ""
+		// Save now, not after the send: if starting the process fails, the
+		// context still points at the session that was just created.
+		if err := config.Save(a.ctx); err != nil {
+			return err
+		}
 		a.printf("session %s", sessionID)
 	} else {
 		sessionID, err = a.resolveSession(s)
