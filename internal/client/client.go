@@ -251,4 +251,3 @@ func (c *Client) Retry(ctx context.Context, processID, mode string) (Process, er
 	err := c.do(ctx, http.MethodPost, "/v1/processes/"+url.PathEscape(processID)+"/retry", map[string]any{"mode": mode}, &out)
 	return out, err
 }
-
