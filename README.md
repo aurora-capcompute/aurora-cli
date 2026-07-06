@@ -74,10 +74,10 @@ CLI looks tokens up through the API (the trusted-client posture) so
 aurora mount http://127.0.0.1:8080     # remembered from now on
 cat > manifest.json <<'EOF'
 {
-  "version": 3,
+  "version": 4,
   "syscalls": [
-    {"name": "timer.set", "type": "core.timer"},
-    {"name": "llm", "type": "core.openaiApi", "hidden": true,
+    {"syscall": "core.timer"},
+    {"syscall": "core.openaiApi", "hidden": true,
      "settings": {"api_key": "sk-…", "default_model": "gpt-4o-mini",
                   "require_approval": false}}
   ]

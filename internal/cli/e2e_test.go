@@ -192,10 +192,10 @@ func TestTerminalEndToEnd(t *testing.T) {
 	// A manifest file, as a user would write one.
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
-	  "version": 3,
+	  "version": 4,
 	  "syscalls": [
-	    {"name": "timer.set", "type": "core.timer"},
-	    {"name": "llm", "type": "core.openaiApi", "hidden": true,
+	    {"syscall": "core.timer"},
+	    {"syscall": "core.openaiApi", "hidden": true,
 	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
 	                  "default_model": "stub", "require_approval": false}}
 	  ]
@@ -323,9 +323,9 @@ func TestTerminalApproveDeny(t *testing.T) {
 
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
-	  "version": 3,
+	  "version": 4,
 	  "syscalls": [
-	    {"name": "llm", "type": "core.openaiApi", "hidden": true,
+	    {"syscall": "core.openaiApi", "hidden": true,
 	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
 	                  "default_model": "stub", "require_approval": true}}
 	  ]
