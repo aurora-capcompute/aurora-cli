@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aurora-capcompute/aurora-cli/internal/client"
-	"github.com/aurora-capcompute/aurora-cli/internal/config"
+	"github.com/aurora-capcompute/aurora-cli/internal/cli/client"
+	"github.com/aurora-capcompute/aurora-cli/internal/cli/config"
 )
 
 const usage = `aurora-cli — terminal for an aurora-dist
