@@ -111,6 +111,12 @@ type JournalEntry struct {
 	Compensates *int    `json:"compensates,omitempty"`
 }
 
+// Program is one loaded program artifact.
+type Program struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
+}
+
 type Resolution struct {
 	Decision string          `json:"decision,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`
@@ -198,6 +204,14 @@ func (e *APIError) Error() string { return e.Message }
 func (c *Client) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	var out []SessionSummary
 	err := c.do(ctx, http.MethodGet, "/v1/sessions", nil, &out)
+	return out, err
+}
+
+// Programs lists the loaded program artifacts (read-only; the set is
+// reconciled from the server's programs directory).
+func (c *Client) Programs(ctx context.Context) ([]Program, error) {
+	var out []Program
+	err := c.do(ctx, http.MethodGet, "/v1/programs", nil, &out)
 	return out, err
 }
 

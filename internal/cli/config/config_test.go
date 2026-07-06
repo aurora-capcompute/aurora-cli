@@ -18,7 +18,7 @@ func TestContextRoundTripsThroughAuroraConfig(t *testing.T) {
 		t.Fatalf("missing context = %+v, want zero", loaded)
 	}
 
-	want := Context{Server: "http://127.0.0.1:9090", Session: "ses_1", Process: "proc_1@2"}
+	want := Context{Server: "http://127.0.0.1:9090", Path: "/ses_1/proc_1", PrevPath: "/"}
 	if err := Save(want); err != nil {
 		t.Fatalf("save: %v", err)
 	}

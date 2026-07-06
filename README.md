@@ -1,62 +1,73 @@
 # aurora-cli
 
-The first Aurora terminal: a CLI binding directly to an
-[`aurora-dist`](https://github.com/aurora-capcompute/aurora-dist) `/v1` API —
-trusted local single-principal use, no policy layer between. It exists for
-two reasons: to drive an agent from a shell, and to be the **API-completeness
+The Aurora terminal: a **shell over an
+[`aurora-dist`](https://github.com/aurora-capcompute/aurora-dist)** `/v1` API —
+trusted local single-principal use, no policy layer between. It exists for two
+reasons: to drive an agent from a shell, and to be the **API-completeness
 test** — the client defines its own wire types and consumes only the public
-HTTP contract, so anything the terminal cannot do is a hole in the API,
-not a missing import.
+HTTP contract, so anything the terminal cannot do is a hole in the API, not a
+missing import.
 
-It carries a **saved working context** the way kubectl does: the server, the
-current session, and the current process live in a small config file
-(`$AURORA_CONFIG`, else `$XDG_CONFIG_HOME/aurora/context.json`), so a session
-or process chosen once need not be retyped. `-s`/`-p`/`-server` override the
-context for one command; `-o json` prints the raw payload for piping to `jq`.
+Aurora's event-sourced state is a tree, so the terminal browses it as a
+virtual filesystem — `/proc` for agents:
 
 ```
-aurora-cli <command> [args] [-s session] [-p process] [-server url] [-o json]
+/                     the tenant: sessions, plus programs/
+/programs/agent       loaded program artifacts
+/ses_x                a session: history + its runs
+/ses_x/proc_y         a run: status message answer error manifest,
+                      journal positions 0 1 2 …, revisions/, tasks/
+/ses_x/proc_y/17      one journal entry (cat it)
+/ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
+/ses_x/proc_y/tasks/task_z     a durable task; ls -l shows -> its position,
+                               because a task IS its open intent's park
+```
 
-Context (saved, so you don't retype ids):
-  context                        show the current server, session, process
-  use [session] [-server url]    set the current session and/or server
-  new [-tag k=v ...] [-keep]     create a session and switch to it
-  sessions                       list sessions (current marked with *)
+The commands are the shell's own. Paths are absolute or relative to a
+**saved working directory** (`$AURORA_CONFIG`, else
+`$XDG_CONFIG_HOME/aurora/context.json`), and unique id prefixes resolve.
 
-In the current session:
-  send <message> [-manifest f] [-new] [-detach]
-                                 start a process and poll it to its answer
-  ps                             list the session's processes
-  log [--all-revisions]          the whole session log (every process)
-  graph                          the delegation call-graph tree
+```
+Navigate and read:
+  pwd · cd [path|-] · ls [path] [-l] · cat <path>...
+  tail [path] [-n N]           the last N entries: recent runs of a session,
+                               newest journal entries of a run
+  tree [path]                  the delegation tree of runs
+  stat <path>                  detailed JSON for any node
+  diff <revA> <revB>           where a run's two revisions diverge —
+                               the shared prefix, then - rolled back / + re-run
 
-On the current process (override with -p):
-  proc · journal [--all-revisions] · tasks
+Act (history is append-only: there is no rm — these are the only writes):
+  run <message> [-manifest f] [-new] [-detach]
+  mkdir [-tag k=v ...]         create a session, print its id
+  kill [run] · retry [-restart] [run]
   approve <task> [-reason] · deny <task> [-reason]
   resolve <task> -decision d [-data json] [-reason] [-token t]
-  stop · retry [-restart]
+  mount [url]                  print or set the aurora-dist server
 ```
 
-**One read, rendered here.** Every view — `log`, `journal`, `graph`, `tasks`,
-per-revision — is a rendering of the single `GET /v1/sessions/{id}` payload
-the server returns; the terminal does the grouping. There is no separate
-graph/journal/tasks endpoint on the API.
+**One read, rendered here.** Every view — `ls`, `cat`, `tree`, `tail`,
+`diff`, per-revision — is a rendering of the single `GET /v1/sessions/{id}`
+payload the server returns; the terminal does the grouping. Only the root and
+`/programs` need their own listings. All watching is a re-run away — output
+is line-oriented and pipeable, so external tools (`jq`, `tv`, `grep`) compose.
 
-`send` starts the process, then polls its status to completion, prints the
-final answer, and remembers the process as current. A process parked on a
-durable task keeps being polled — a timer resumes it by itself, an approval
-can arrive from another terminal — with a hint to resolve pending tasks via
-`tasks`/`approve`.
+`run` starts a run in the current session, then polls its status to
+completion and prints the final answer. A run parked on a durable task keeps
+being polled — a timer resumes it by itself, an approval can arrive from
+another terminal — with a one-line hint naming the pending task. `kill` maps
+to stop: a run mid-rollback refuses it by design (effects must settle), and
+the honest way out is denying its pending inverse task.
 
 Task resolution authenticates with the task's bearer `resolution_token`; the
 CLI looks tokens up through the API (the trusted-client posture) so
-`approve <task-id>` is enough, while `resolve -token …` keeps the explicit
-path for scripts.
+`approve <task-id>` — or `approve proc_y/tasks/task_z` — is enough, while
+`resolve -token …` keeps the explicit path for scripts.
 
 ## Example
 
 ```sh
-aurora-cli use -server http://127.0.0.1:8080   # remembered from now on
+aurora mount http://127.0.0.1:8080     # remembered from now on
 cat > manifest.json <<'EOF'
 {
   "version": 2,
@@ -68,9 +79,12 @@ cat > manifest.json <<'EOF'
   ]
 }
 EOF
-aurora-cli send -new -manifest manifest.json "take a nap, then report back"
-aurora-cli log        # the current session; no id retyped
-aurora-cli journal    # the current process
+aurora run -new -manifest manifest.json "take a nap, then report back"
+aurora ls -l          # the session: history + its runs
+aurora cd proc        # unique prefix resolves to the run
+aurora ls -l          # the journal narrative, one line per syscall
+aurora cat answer
+aurora tail -n 5 /    # the most recent sessions
 ```
 
 ## Verification
@@ -82,6 +96,7 @@ go test -race ./...
 
 The end-to-end tests build the sibling `aurora-dist` binary and the real Rust
 agent program from the sibling `aurora-brains` checkout, then drive the whole
-stack through this CLI — the send/poll loop with a firing timer, and the
-approve/deny cycle — skipping when the toolchains or checkouts are absent.
-The module itself is pure stdlib.
+stack through this CLI — the run/poll loop with a firing timer, the
+filesystem walk (pwd/cd/ls/cat/tail/tree/diff over sessions, runs, journal
+entries, tasks, programs), and the approve/deny cycle — skipping when the
+toolchains or checkouts are absent. The module itself is pure stdlib.
