@@ -76,7 +76,7 @@ cat > manifest.json <<'EOF'
 {
   "version": 4,
   "syscalls": [
-    {"syscall": "core.timer"},
+    {"syscall": "sys.timer"},
     {"syscall": "core.openaiApi", "hidden": true,
      "settings": {"api_key": "sk-…", "default_model": "gpt-4o-mini",
                   "require_approval": false}}

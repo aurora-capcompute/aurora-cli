@@ -725,7 +725,7 @@ func (a *app) parkHint(ctx context.Context, process client.Process) string {
 			if task.State != "pending" {
 				continue
 			}
-			if task.Syscall.Name != "timer.set" {
+			if task.Syscall.Name != "sys.timer" {
 				return fmt.Sprintf(" — task %s awaits resolution (`approve %s` or `deny`)", task.ID, task.ID)
 			}
 		}

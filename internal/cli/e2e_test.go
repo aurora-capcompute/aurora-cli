@@ -91,7 +91,7 @@ func scriptedLLM(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		reply := `{"actions":[{"action":"timer.set","content":{"duration_seconds":1,"label":"nap"}}]}`
+		reply := `{"actions":[{"action":"sys.timer","content":{"duration_seconds":1,"label":"nap"}}]}`
 		if bytes.Contains(body, []byte(`fired`)) {
 			reply = `{"actions":[{"action":"final","content":{"answer":"woke up after the nap"}}]}`
 		}
@@ -194,7 +194,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	manifest := fmt.Sprintf(`{
 	  "version": 4,
 	  "syscalls": [
-	    {"syscall": "core.timer"},
+	    {"syscall": "sys.timer"},
 	    {"syscall": "core.openaiApi", "hidden": true,
 	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
 	                  "default_model": "stub", "require_approval": false}}
@@ -245,7 +245,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	// The process directory is the journal: leaf files plus one entry per
 	// syscall, rendered as the narrative by ls -l.
 	shown := aurora(t, "ls", "-l", processID)
-	for _, want := range []string{"status", "revisions/", "tasks/", "sys.input", "openai.chat", "timer.set", "sys.output"} {
+	for _, want := range []string{"status", "revisions/", "tasks/", "sys.input", "openai.chat", "sys.timer", "sys.output"} {
 		if !strings.Contains(shown, want) {
 			t.Fatalf("ls -l process missing %s:\n%s", want, shown)
 		}
@@ -264,7 +264,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 
 	// The timer task is anchored to its journal position (a symlink in
 	// ls -l) and was resolved by the timer service.
-	if got := aurora(t, "ls", "-l", processID+"/tasks"); !strings.Contains(got, "-> ../") || !strings.Contains(got, "timer.set") {
+	if got := aurora(t, "ls", "-l", processID+"/tasks"); !strings.Contains(got, "-> ../") || !strings.Contains(got, "sys.timer") {
 		t.Fatalf("ls -l tasks = %q", got)
 	}
 	taskID := extract(t, aurora(t, "ls", processID+"/tasks"), "")
