@@ -1,7 +1,7 @@
 // Package cli implements the aurora terminal: a shell over an aurora-dist.
 // The distribution's event-sourced state is a tree (see fs.go), so the
 // commands are the shell's own — pwd/cd/ls/cat/tail/tree/stat/diff to read
-// it, run/mkdir/kill/retry/approve/deny/resolve to act on it, mount to point
+// it, spawn/mkdir/kill/retry/approve/deny/resolve to act on it, mount to point
 // at a server. It keeps a working directory the way a shell does, persisted
 // in a small config file so a path chosen once need not be retyped. Reads
 // come off one endpoint — GET /v1/sessions/{id} returns the whole session
@@ -31,8 +31,8 @@ The distribution is a virtual filesystem:
 
   /                     the tenant: sessions, plus programs/
   /programs/agent       loaded program artifacts
-  /ses_x                a session: history + its runs
-  /ses_x/proc_y         a run: status message answer error manifest,
+  /ses_x                a session: history + its processes
+  /ses_x/proc_y         a process: status message answer error manifest,
                         journal positions 0 1 2 …, revisions/, tasks/
   /ses_x/proc_y/17      one journal entry (cat it)
   /ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
@@ -45,17 +45,18 @@ id prefixes resolve):
   ls [path] [-l]               list a directory (-l: one detailed line each)
   cat <path>...                print a file: an entry, a task, history, …
   tail [path] [-n N]           the last N entries of a directory (default 10)
-  tree [path]                  the delegation tree of runs
+  tree [path]                  the delegation tree of processes
   stat <path>                  detailed JSON for any node
-  diff <revA> <revB>           where a run's two revisions diverge
+  diff <revA> <revB>           where a process's two revisions diverge
 
 Act (history is append-only: there is no rm — these are the only writes):
-  run <message> [-manifest f] [-new] [-detach]
-                               start a run in the current session and follow
-                               it to its answer (-new: fresh session + cd)
+  spawn <message> [-manifest f|-] [-new] [-detach]
+                               spawn a process in the current session and
+                               follow it to its answer (-new: fresh session +
+                               cd; no -manifest: the session's is inherited)
   mkdir [-tag k=v ...]         create a session, print its id
-  kill [run]                   stop a run (default: the cwd's run)
-  retry [-restart] [run]       resume (default) or restart a run
+  kill [process]               stop a process (default: the cwd's)
+  retry [-restart] [process]   resume (default) or restart a process
   approve <task> [-reason t]   resolve a pending task as approved
   deny <task> [-reason t]      resolve a pending task as denied
   resolve <task> -decision d [-data json] [-reason t] [-token t]
@@ -93,8 +94,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return a.stat(ctx, rest)
 	case "diff":
 		return a.diff(ctx, rest)
-	case "run":
-		return a.run(ctx, rest)
+	case "spawn":
+		return a.spawn(ctx, rest)
 	case "mkdir":
 		return a.mkdir(ctx, rest)
 	case "kill":
@@ -189,11 +190,11 @@ func (a *app) cwdSession() (string, error) {
 	return segs[0], nil
 }
 
-// cwdRun returns the run id component of the current path.
-func (a *app) cwdRun() (string, error) {
+// cwdProcess returns the process id component of the current path.
+func (a *app) cwdProcess() (string, error) {
 	segs := pathSegments(a.cwd())
 	if len(segs) < 2 || segs[0] == "programs" || segs[1] == "history" {
-		return "", errors.New("not inside a run: cd into one, or pass its path")
+		return "", errors.New("not inside a process: cd into one, or pass its path")
 	}
 	return segs[1], nil
 }
@@ -333,9 +334,9 @@ func (a *app) cat(ctx context.Context, args []string) error {
 	return nil
 }
 
-// tail prints the last N entries of a directory — the most recent runs of a
-// session, the newest journal entries of a run, the latest sessions at the
-// root — or the last N lines of a file.
+// tail prints the last N entries of a directory — the most recent processes
+// of a session, the newest journal entries of a process, the latest sessions
+// at the root — or the last N lines of a file.
 func (a *app) tail(ctx context.Context, args []string) error {
 	fs, server := a.flags("tail")
 	count := fs.Int("n", 10, "entries to show")
@@ -398,45 +399,47 @@ func (a *app) tree(ctx context.Context, args []string) error {
 				return err
 			}
 			a.printf("%s  %s", log.Session.ID, quoteTitle(truncate(log.Session.Title, 48)))
-			a.printTree(log, rootRuns(log), "")
+			a.printTree(log, rootProcesses(log), "")
 		}
 		return nil
 	case nodeSession:
 		a.printf("%s  %s", n.log.Session.ID, quoteTitle(truncate(n.log.Session.Title, 48)))
-		a.printTree(n.log, rootRuns(n.log), "")
+		a.printTree(n.log, rootProcesses(n.log), "")
 		return nil
-	case nodeRun:
-		a.printf("%s", processLine(n.run.Process))
-		a.printTree(n.log, n.run.ChildProcessIDs, "")
+	case nodeProcess:
+		a.printf("%s", processLine(n.process.Process))
+		a.printTree(n.log, n.process.ChildProcessIDs, "")
 		return nil
 	default:
 		return notDir(n.path)
 	}
 }
 
-// rootRuns lists a session's top-level runs — those not spawned by another.
-func rootRuns(log client.SessionLog) []string {
+// rootProcesses lists a session's top-level processes — those not spawned by
+// another.
+func rootProcesses(log client.SessionLog) []string {
 	var roots []string
-	for _, run := range log.Processes {
-		if run.ParentProcessID == "" {
-			roots = append(roots, run.ID)
+	for _, proc := range log.Processes {
+		if proc.ParentProcessID == "" {
+			roots = append(roots, proc.ID)
 		}
 	}
 	return roots
 }
 
-// printTree renders runs and their delegation children with tree connectors.
+// printTree renders processes and their spawned children with tree
+// connectors.
 func (a *app) printTree(log client.SessionLog, ids []string, prefix string) {
 	byID := make(map[string]client.ProcessLog, len(log.Processes))
-	for _, run := range log.Processes {
-		byID[run.ID] = run
+	for _, proc := range log.Processes {
+		byID[proc.ID] = proc
 	}
 	a.printSubtree(byID, ids, prefix)
 }
 
 func (a *app) printSubtree(byID map[string]client.ProcessLog, ids []string, prefix string) {
 	for i, id := range ids {
-		run, ok := byID[id]
+		proc, ok := byID[id]
 		if !ok {
 			continue
 		}
@@ -444,8 +447,8 @@ func (a *app) printSubtree(byID map[string]client.ProcessLog, ids []string, pref
 		if i == len(ids)-1 {
 			connector, childPrefix = "└── ", prefix+"    "
 		}
-		a.printf("%s%s%s", prefix, connector, processLine(run.Process))
-		a.printSubtree(byID, run.ChildProcessIDs, childPrefix)
+		a.printf("%s%s%s", prefix, connector, processLine(proc.Process))
+		a.printSubtree(byID, proc.ChildProcessIDs, childPrefix)
 	}
 }
 
@@ -481,16 +484,16 @@ func (a *app) stat(ctx context.Context, args []string) error {
 		return a.emitJSON(n.log.Session)
 	case nodeHistory:
 		return a.emitJSON(map[string]any{"turns": len(n.log.History)})
-	case nodeRun:
+	case nodeProcess:
 		return a.emitJSON(struct {
 			client.Process
 			Parent   string   `json:"parent_process_id,omitempty"`
 			Children []string `json:"child_process_ids,omitempty"`
 			Entries  int      `json:"entries"`
 			Tasks    int      `json:"tasks"`
-		}{n.run.Process, n.run.ParentProcessID, n.run.ChildProcessIDs,
-			len(effectiveEntries(n.run.Entries, n.run.Revision)), len(n.run.Tasks)})
-	case nodeRunFile:
+		}{n.process.Process, n.process.ParentProcessID, n.process.ChildProcessIDs,
+			len(effectiveEntries(n.process.Entries, n.process.Revision)), len(n.process.Tasks)})
+	case nodeProcessFile:
 		lines, err := catLines(n)
 		if err != nil {
 			return err
@@ -499,22 +502,22 @@ func (a *app) stat(ctx context.Context, args []string) error {
 	case nodeEntry:
 		return a.emitJSON(n.entry)
 	case nodeRevisions:
-		return a.emitJSON(map[string]any{"revisions": n.run.Revision})
+		return a.emitJSON(map[string]any{"revisions": n.process.Revision})
 	case nodeRevision:
 		return a.emitJSON(map[string]any{
 			"revision": n.revision,
-			"entries":  len(effectiveEntries(n.run.Entries, n.revision)),
+			"entries":  len(effectiveEntries(n.process.Entries, n.revision)),
 		})
 	case nodeTasks:
-		return a.emitJSON(map[string]any{"tasks": len(n.run.Tasks)})
+		return a.emitJSON(map[string]any{"tasks": len(n.process.Tasks)})
 	case nodeTask:
 		return a.emitJSON(n.task)
 	}
 	return noEnt(n.path)
 }
 
-// diff shows where two revisions of one run diverge: the shared prefix both
-// replayed, then the rolled-back entries (-) and their re-execution (+).
+// diff shows where two revisions of one process diverge: the shared prefix
+// both replayed, then the rolled-back entries (-) and their re-execution (+).
 func (a *app) diff(ctx context.Context, args []string) error {
 	fs, server := a.flags("diff")
 	rest, err := a.bind(fs, server, args)
@@ -522,7 +525,7 @@ func (a *app) diff(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) != 2 {
-		return errors.New("usage: diff <run|run/revisions/N> <run|run/revisions/M>")
+		return errors.New("usage: diff <process|process/revisions/N> <process|process/revisions/M>")
 	}
 	left, err := a.revisionView(ctx, rest[0])
 	if err != nil {
@@ -532,11 +535,11 @@ func (a *app) diff(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if left.run.ID != right.run.ID {
-		return errors.New("diff compares two revisions of one run")
+	if left.process.ID != right.process.ID {
+		return errors.New("diff compares two revisions of one process")
 	}
-	before := effectiveEntries(left.run.Entries, left.revision)
-	after := effectiveEntries(right.run.Entries, right.revision)
+	before := effectiveEntries(left.process.Entries, left.revision)
+	after := effectiveEntries(right.process.Entries, right.revision)
 	shared := 0
 	for shared < len(before) && shared < len(after) &&
 		before[shared].Position == after[shared].Position &&
@@ -559,7 +562,7 @@ func (a *app) diff(ctx context.Context, args []string) error {
 	return nil
 }
 
-// revisionView resolves a diff argument: a revision directory, or a run
+// revisionView resolves a diff argument: a revision directory, or a process
 // (meaning its current revision).
 func (a *app) revisionView(ctx context.Context, arg string) (node, error) {
 	n, err := a.resolveNode(ctx, arg)
@@ -569,36 +572,32 @@ func (a *app) revisionView(ctx context.Context, arg string) (node, error) {
 	switch n.kind {
 	case nodeRevision:
 		return n, nil
-	case nodeRun:
-		n.revision = n.run.Revision
+	case nodeProcess:
+		n.revision = n.process.Revision
 		return n, nil
 	}
-	return node{}, fmt.Errorf("%s: not a run or revision", n.path)
+	return node{}, fmt.Errorf("%s: not a process or revision", n.path)
 }
 
 // --- verbs ---
 
-func (a *app) run(ctx context.Context, args []string) error {
-	fs, server := a.flags("run")
-	manifestPath := fs.String("manifest", "", "path to a manifest JSON file")
-	detach := fs.Bool("detach", false, "print the run id and exit instead of following")
+func (a *app) spawn(ctx context.Context, args []string) error {
+	fs, server := a.flags("spawn")
+	manifestPath := fs.String("manifest", "", "path to a manifest JSON file (- reads stdin)")
+	detach := fs.Bool("detach", false, "print the process id and exit instead of following")
 	newSession := fs.Bool("new", false, "create a fresh session and cd into it first")
 	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: run <message> [-manifest file.json] [-new] [-detach]")
+		return errors.New("usage: spawn <message> [-manifest file.json|-] [-new] [-detach]")
 	}
 	message := strings.Join(rest, " ")
 
-	var manifest json.RawMessage
-	if *manifestPath != "" {
-		raw, err := os.ReadFile(*manifestPath)
-		if err != nil {
-			return fmt.Errorf("read manifest: %w", err)
-		}
-		manifest = raw
+	manifest, err := readManifest(*manifestPath)
+	if err != nil {
+		return err
 	}
 
 	var sessionID string
@@ -610,14 +609,22 @@ func (a *app) run(ctx context.Context, args []string) error {
 		sessionID = log.Session.ID
 		a.ctx.PrevPath = a.cwd()
 		a.ctx.Path = "/" + sessionID
-		// Save now, not after the start: if starting the run fails, the cwd
-		// still points at the session that was just created.
+		// Save now, not after the spawn: if starting the process fails, the
+		// cwd still points at the session that was just created.
 		if err := config.Save(a.ctx); err != nil {
 			return err
 		}
 		a.printf("session %s", sessionID)
 	} else if sessionID, err = a.cwdSession(); err != nil {
 		return err
+	}
+
+	if manifest == nil {
+		// No -manifest: inherit the session's — the latest process's — so the
+		// grant set is stated once per conversation, like an environment.
+		if inherited, err := a.sessionManifest(ctx, sessionID); err == nil {
+			manifest = inherited
+		}
 	}
 
 	process, err := a.client.CreateProcess(ctx, sessionID, message, manifest)
@@ -631,11 +638,44 @@ func (a *app) run(ctx context.Context, args []string) error {
 	return a.pollToAnswer(ctx, process.ID)
 }
 
-// pollToAnswer polls the run's status until it reaches a terminal state,
-// printing the answer (or the failure). A run that parks on a task — an
+// readManifest loads the manifest argument: a file path, or - for stdin.
+// Empty means none was passed — the session's manifest is inherited.
+func readManifest(path string) (json.RawMessage, error) {
+	switch path {
+	case "":
+		return nil, nil
+	case "-":
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read manifest from stdin: %w", err)
+		}
+		return raw, nil
+	default:
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read manifest: %w", err)
+		}
+		return raw, nil
+	}
+}
+
+// sessionManifest returns the manifest of the session's latest process.
+func (a *app) sessionManifest(ctx context.Context, sessionID string) (json.RawMessage, error) {
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(log.Processes); n > 0 {
+		return log.Processes[n-1].Manifest, nil
+	}
+	return nil, nil
+}
+
+// pollToAnswer polls the process's status until it reaches a terminal state,
+// printing the answer (or the failure). A process that parks on a task — an
 // approval or a timer — keeps being polled: a timer resolves itself and an
 // approval is resolved out-of-band, so a hint is printed once and following
-// continues until the run finishes.
+// continues until the process finishes.
 func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 	hinted := false
 	for {
@@ -648,7 +688,7 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 			a.printf("✔ %s", process.Answer)
 			return nil
 		case process.Status == "failed":
-			return fmt.Errorf("run failed: %s", process.Error)
+			return fmt.Errorf("process failed: %s", process.Error)
 		case process.Status == "stopped":
 			a.printf("■ stopped")
 			return nil
@@ -656,7 +696,7 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 			a.printf("↩ rolled back — %s", process.Answer)
 			return nil
 		case process.Status == "interrupted":
-			return fmt.Errorf("run interrupted: %s", process.Error)
+			return fmt.Errorf("process interrupted: %s", process.Error)
 		case process.Parked() && !hinted:
 			a.printf("⏸ %s%s; still following", process.Status, a.parkHint(ctx, process))
 			hinted = true
@@ -669,9 +709,9 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 	}
 }
 
-// parkHint says what a parked run actually waits on: a timer (it fires on
-// its own — a nap, or an abort-retry) needs nothing, anything else needs a
-// human resolution.
+// parkHint says what a parked process actually waits on: a timer (it fires
+// on its own — a nap, or an abort-retry) needs nothing, anything else needs
+// a human resolution.
 func (a *app) parkHint(ctx context.Context, process client.Process) string {
 	log, err := a.client.Session(ctx, process.SessionID)
 	if err != nil {
@@ -709,17 +749,17 @@ func (a *app) mkdir(ctx context.Context, args []string) error {
 	return nil
 }
 
-// targetRun resolves a verb's run: an explicit path (or bare id), else the
-// cwd's run.
-func (a *app) targetRun(ctx context.Context, rest []string) (string, error) {
+// targetProcess resolves a verb's process: an explicit path (or bare id),
+// else the cwd's process.
+func (a *app) targetProcess(ctx context.Context, rest []string) (string, error) {
 	if len(rest) == 0 {
-		return a.cwdRun()
+		return a.cwdProcess()
 	}
 	if n, err := a.resolveNode(ctx, rest[0]); err == nil {
-		if n.kind != nodeRun {
-			return "", fmt.Errorf("%s: not a run", n.path)
+		if n.kind != nodeProcess {
+			return "", fmt.Errorf("%s: not a process", n.path)
 		}
-		return n.run.ID, nil
+		return n.process.ID, nil
 	}
 	// A bare id from anywhere: let the API find it.
 	if process, err := a.client.GetProcess(ctx, rest[0]); err == nil {
@@ -734,7 +774,7 @@ func (a *app) kill(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	processID, err := a.targetRun(ctx, rest)
+	processID, err := a.targetProcess(ctx, rest)
 	if err != nil {
 		return err
 	}
@@ -753,7 +793,7 @@ func (a *app) retry(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	processID, err := a.targetRun(ctx, rest)
+	processID, err := a.targetProcess(ctx, rest)
 	if err != nil {
 		return err
 	}

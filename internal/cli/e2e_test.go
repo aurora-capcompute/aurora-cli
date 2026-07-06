@@ -152,10 +152,10 @@ func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) 
 	}
 }
 
-// run executes one CLI command line and returns its rendered output. The
-// server and current session/process come from the saved context (set up per
-// test via AURORA_CONFIG), exactly as they would for a user.
-func run(t *testing.T, args ...string) string {
+// aurora executes one CLI command line and returns its rendered output. The
+// server and working directory come from the saved context (set up per test
+// via AURORA_CONFIG), exactly as they would for a user.
+func aurora(t *testing.T, args ...string) string {
 	t.Helper()
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -170,7 +170,7 @@ func run(t *testing.T, args ...string) string {
 func mountServer(t *testing.T, server string) {
 	t.Helper()
 	t.Setenv("AURORA_CONFIG", filepath.Join(t.TempDir(), "context.json"))
-	run(t, "mount", server)
+	aurora(t, "mount", server)
 }
 
 func TestTerminalEndToEnd(t *testing.T) {
@@ -192,8 +192,8 @@ func TestTerminalEndToEnd(t *testing.T) {
 	// A manifest file, as a user would write one.
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
-	  "version": 2,
-	  "tools": [
+	  "version": 3,
+	  "syscalls": [
 	    {"name": "timer.set", "type": "core.timer"},
 	    {"name": "llm", "type": "core.openaiApi", "hidden": true,
 	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
@@ -204,94 +204,94 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// run -new creates the session, cds into it, starts the run, polls it
-	// through the timer park and fire, and prints the final answer. Flags
+	// spawn -new creates the session, cds into it, spawns the process, polls
+	// it through the timer park and fire, and prints the final answer. Flags
 	// after the message exercise interleaved parsing.
-	sent := run(t, "run", "-new", "take a nap, then report back", "-manifest", manifestPath)
+	sent := aurora(t, "spawn", "-new", "take a nap, then report back", "-manifest", manifestPath)
 	if !strings.Contains(sent, "session ses_") || !strings.Contains(sent, "process proc_") {
-		t.Fatalf("run output missing ids:\n%s", sent)
+		t.Fatalf("spawn output missing ids:\n%s", sent)
 	}
 	if !strings.Contains(sent, "✔ woke up after the nap") {
-		t.Fatalf("run did not follow to the answer:\n%s", sent)
+		t.Fatalf("spawn did not follow to the answer:\n%s", sent)
 	}
 	if !strings.Contains(sent, "timer") {
-		t.Fatalf("run did not surface the timer park:\n%s", sent)
+		t.Fatalf("spawn did not surface the timer park:\n%s", sent)
 	}
 	sessionID := extract(t, sent, "session ")
 	processID := extract(t, sent, "process ")
 
 	// -new cd'ed into the fresh session, like a shell.
-	if got := run(t, "pwd"); !strings.Contains(got, "/"+sessionID) {
+	if got := aurora(t, "pwd"); !strings.Contains(got, "/"+sessionID) {
 		t.Fatalf("pwd = %q, want the new session as cwd", got)
 	}
 
 	// The root lists the session and the programs directory; the loaded
 	// artifact is a file under it.
-	if got := run(t, "ls", "/"); !strings.Contains(got, sessionID+"/") || !strings.Contains(got, "programs/") {
+	if got := aurora(t, "ls", "/"); !strings.Contains(got, sessionID+"/") || !strings.Contains(got, "programs/") {
 		t.Fatalf("ls / = %q", got)
 	}
-	if got := run(t, "ls", "/programs"); !strings.Contains(got, "agent") {
+	if got := aurora(t, "ls", "/programs"); !strings.Contains(got, "agent") {
 		t.Fatalf("ls /programs = %q", got)
 	}
 
-	// The session directory holds the conversation and the run.
-	if got := run(t, "ls"); !strings.Contains(got, "history") || !strings.Contains(got, processID+"/") {
+	// The session directory holds the conversation and the process.
+	if got := aurora(t, "ls"); !strings.Contains(got, "history") || !strings.Contains(got, processID+"/") {
 		t.Fatalf("ls (session) = %q", got)
 	}
-	if got := run(t, "cat", "history"); !strings.Contains(got, "user: take a nap") || !strings.Contains(got, "assistant: woke up") {
+	if got := aurora(t, "cat", "history"); !strings.Contains(got, "user: take a nap") || !strings.Contains(got, "assistant: woke up") {
 		t.Fatalf("cat history = %q", got)
 	}
 
-	// The run directory is the journal: leaf files plus one entry per
+	// The process directory is the journal: leaf files plus one entry per
 	// syscall, rendered as the narrative by ls -l.
-	shown := run(t, "ls", "-l", processID)
+	shown := aurora(t, "ls", "-l", processID)
 	for _, want := range []string{"status", "revisions/", "tasks/", "sys.input", "openai.chat", "timer.set", "sys.output"} {
 		if !strings.Contains(shown, want) {
-			t.Fatalf("ls -l run missing %s:\n%s", want, shown)
+			t.Fatalf("ls -l process missing %s:\n%s", want, shown)
 		}
 	}
-	if got := run(t, "cat", processID+"/answer"); !strings.Contains(got, "woke up after the nap") {
+	if got := aurora(t, "cat", processID+"/answer"); !strings.Contains(got, "woke up after the nap") {
 		t.Fatalf("cat answer = %q", got)
 	}
-	if got := run(t, "cat", processID+"/0"); !strings.Contains(got, "sys.input") {
+	if got := aurora(t, "cat", processID+"/0"); !strings.Contains(got, "sys.input") {
 		t.Fatalf("cat entry 0 = %q", got)
 	}
 
 	// tail shows the newest entries — the answer being recorded.
-	if got := run(t, "tail", "-n", "2", processID); !strings.Contains(got, "sys.output") {
-		t.Fatalf("tail run = %q", got)
+	if got := aurora(t, "tail", "-n", "2", processID); !strings.Contains(got, "sys.output") {
+		t.Fatalf("tail process = %q", got)
 	}
 
 	// The timer task is anchored to its journal position (a symlink in
 	// ls -l) and was resolved by the timer service.
-	if got := run(t, "ls", "-l", processID+"/tasks"); !strings.Contains(got, "-> ../") || !strings.Contains(got, "timer.set") {
+	if got := aurora(t, "ls", "-l", processID+"/tasks"); !strings.Contains(got, "-> ../") || !strings.Contains(got, "timer.set") {
 		t.Fatalf("ls -l tasks = %q", got)
 	}
-	taskID := extract(t, run(t, "ls", processID+"/tasks"), "")
-	if got := run(t, "cat", processID+"/tasks/"+taskID); !strings.Contains(got, `"actor": "timer"`) {
+	taskID := extract(t, aurora(t, "ls", processID+"/tasks"), "")
+	if got := aurora(t, "cat", processID+"/tasks/"+taskID); !strings.Contains(got, `"actor": "timer"`) {
 		t.Fatalf("cat task = %q", got)
 	}
 
-	// tree renders the delegation tree; a lone run is a single node.
-	if got := run(t, "tree"); !strings.Contains(got, "completed") {
+	// tree renders the delegation tree; a lone process is a single node.
+	if got := aurora(t, "tree"); !strings.Contains(got, "completed") {
 		t.Fatalf("tree = %q", got)
 	}
 
-	// One revision is identical to the run's current view.
-	if got := run(t, "diff", processID+"/revisions/1", processID); !strings.Contains(got, "identical") {
+	// One revision is identical to the process's current view.
+	if got := aurora(t, "diff", processID+"/revisions/1", processID); !strings.Contains(got, "identical") {
 		t.Fatalf("diff = %q", got)
 	}
 
 	// cd persists like a shell: unique prefixes resolve, files read relative.
-	run(t, "cd", processID)
-	if got := run(t, "pwd"); !strings.Contains(got, "/"+sessionID+"/"+processID) {
+	aurora(t, "cd", processID)
+	if got := aurora(t, "pwd"); !strings.Contains(got, "/"+sessionID+"/"+processID) {
 		t.Fatalf("pwd after cd = %q", got)
 	}
-	if got := run(t, "cat", "status"); !strings.Contains(got, "completed") {
+	if got := aurora(t, "cat", "status"); !strings.Contains(got, "completed") {
 		t.Fatalf("cat status = %q", got)
 	}
-	run(t, "cd", "-")
-	if got := run(t, "pwd"); !strings.Contains(got, "/"+sessionID) || strings.Contains(got, processID) {
+	aurora(t, "cd", "-")
+	if got := aurora(t, "pwd"); !strings.Contains(got, "/"+sessionID) || strings.Contains(got, processID) {
 		t.Fatalf("pwd after cd - = %q", got)
 	}
 }
@@ -323,8 +323,8 @@ func TestTerminalApproveDeny(t *testing.T) {
 
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
-	  "version": 2,
-	  "tools": [
+	  "version": 3,
+	  "syscalls": [
 	    {"name": "llm", "type": "core.openaiApi", "hidden": true,
 	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
 	                  "default_model": "stub", "require_approval": true}}
@@ -334,50 +334,50 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start detached: the run parks awaiting approval. -new cds into the
+	// Start detached: the process parks awaiting approval. -new cds into the
 	// fresh session, so later paths are relative.
-	sent := run(t, "run", "-new", "-detach", "-manifest", manifestPath, "ask the model something")
+	sent := aurora(t, "spawn", "-new", "-detach", "-manifest", manifestPath, "ask the model something")
 	processID := extract(t, sent, "process ")
 	waitStatus(t, processID, "waiting_for_task")
 
-	tasks := run(t, "ls", "-l", processID+"/tasks")
+	tasks := aurora(t, "ls", "-l", processID+"/tasks")
 	if !strings.Contains(tasks, "pending") || !strings.Contains(tasks, "openai.chat") {
 		t.Fatalf("tasks = %q", tasks)
 	}
-	taskID := extract(t, run(t, "ls", processID+"/tasks"), "")
+	taskID := extract(t, aurora(t, "ls", processID+"/tasks"), "")
 
-	// Approve — by task path this time — and the run completes.
-	if got := run(t, "approve", processID+"/tasks/"+taskID, "-reason", "looks fine"); !strings.Contains(got, "approved") {
+	// Approve — by task path this time — and the process completes.
+	if got := aurora(t, "approve", processID+"/tasks/"+taskID, "-reason", "looks fine"); !strings.Contains(got, "approved") {
 		t.Fatalf("approve = %q", got)
 	}
 	waitStatus(t, processID, "completed")
-	if got := run(t, "cat", processID+"/answer"); !strings.Contains(got, "approved answer") {
+	if got := aurora(t, "cat", processID+"/answer"); !strings.Contains(got, "approved answer") {
 		t.Fatalf("answer = %q", got)
 	}
 
 	// Second turn in the same session (the cwd): deny it, by bare task id.
-	sent = run(t, "run", "-detach", "-manifest", manifestPath, "and again")
+	sent = aurora(t, "spawn", "-detach", "and again")
 	processID = extract(t, sent, "process ")
 	waitStatus(t, processID, "waiting_for_task")
-	taskID = extract(t, run(t, "ls", processID+"/tasks"), "")
-	if got := run(t, "deny", taskID, "-reason", "not today"); !strings.Contains(got, "denied") {
+	taskID = extract(t, aurora(t, "ls", processID+"/tasks"), "")
+	if got := aurora(t, "deny", taskID, "-reason", "not today"); !strings.Contains(got, "denied") {
 		t.Fatalf("deny = %q", got)
 	}
-	// The denial fails the cognition syscall; the guest aborts and the run
-	// finishes failed, with the reason on the journal.
+	// The denial fails the cognition syscall; the guest aborts and the
+	// process finishes failed, with the reason on the journal.
 	waitStatus(t, processID, "failed")
-	journal := run(t, "ls", "-l", processID)
+	journal := aurora(t, "ls", "-l", processID)
 	if !strings.Contains(journal, "denied") || !strings.Contains(journal, "not today") {
 		t.Fatalf("journal after deny:\n%s", journal)
 	}
 }
 
-// waitStatus polls the run's status file until it reads the wanted status.
+// waitStatus polls the process's status file until it reads the wanted status.
 func waitStatus(t *testing.T, processID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		got := run(t, "cat", processID+"/status")
+		got := aurora(t, "cat", processID+"/status")
 		if strings.Contains(got, want) {
 			return
 		}

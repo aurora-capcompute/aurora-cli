@@ -5,8 +5,8 @@ package cli
 //
 //	/                    the tenant: sessions, plus programs/
 //	/programs/agent      loaded program artifacts
-//	/ses_x               a session: history + its runs
-//	/ses_x/proc_y        a run: status/message/answer/error/manifest files,
+//	/ses_x               a session: history + its processes
+//	/ses_x/proc_y        a process: status/message/answer/error/manifest files,
 //	                     journal positions 0 1 2 …, revisions/, tasks/
 //	/ses_x/proc_y/17     one journal entry (the current revision's view)
 //	/ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
@@ -16,7 +16,7 @@ package cli
 // the API — one GET /v1/sessions/{id} carries everything at or below a
 // session. Segments resolve by exact id, else by unique prefix. The tree is
 // read-only by design: history is append-only, so there is no rm, mv, or
-// touch — the only writes are the verbs (run, kill, retry, approve, deny).
+// touch — the only writes are the verbs (spawn, kill, retry, approve, deny).
 
 import (
 	"context"
@@ -37,8 +37,8 @@ const (
 	nodeProgram
 	nodeSession
 	nodeHistory
-	nodeRun
-	nodeRunFile
+	nodeProcess
+	nodeProcessFile
 	nodeEntry
 	nodeRevisions
 	nodeRevision
@@ -46,20 +46,20 @@ const (
 	nodeTask
 )
 
-// runFiles are the leaf files every run directory carries.
-var runFiles = []string{"status", "message", "answer", "error", "manifest"}
+// processFiles are the leaf files every process directory carries.
+var processFiles = []string{"status", "message", "answer", "error", "manifest"}
 
 // node is one resolved path: its kind plus the payloads fetched on the way
-// down (the session log for anything at or below a session, the run for
-// anything at or below a run).
+// down (the session log for anything at or below a session, the process for
+// anything at or below a process).
 type node struct {
 	kind nodeKind
 	path string // canonical absolute path, ids expanded to full
 
 	program  client.Program
 	log      client.SessionLog
-	run      client.ProcessLog
-	file     string // nodeRunFile: which leaf
+	process  client.ProcessLog
+	file     string // nodeProcessFile: which leaf
 	revision uint64 // nodeRevision, and nodeEntry's view
 	entry    client.JournalEntry
 	task     client.Task
@@ -67,7 +67,7 @@ type node struct {
 
 func (n node) isDir() bool {
 	switch n.kind {
-	case nodeRoot, nodePrograms, nodeSession, nodeRun, nodeRevisions, nodeRevision, nodeTasks:
+	case nodeRoot, nodePrograms, nodeSession, nodeProcess, nodeRevisions, nodeRevision, nodeTasks:
 		return true
 	}
 	return false
@@ -152,26 +152,26 @@ func (a *app) resolveNode(ctx context.Context, arg string) (node, error) {
 		return n, nil
 	}
 
-	run, err := matchRun(log, segs[1], p)
+	proc, err := matchProcess(log, segs[1], p)
 	if err != nil {
 		return node{}, err
 	}
-	n.kind, n.run, n.path = nodeRun, run, n.path+"/"+run.ID
+	n.kind, n.process, n.path = nodeProcess, proc, n.path+"/"+proc.ID
 	if len(segs) == 2 {
 		return n, nil
 	}
-	return a.resolveInRun(n, p, segs[2:])
+	return a.resolveInProcess(n, p, segs[2:])
 }
 
-// resolveInRun resolves the segments beneath a run directory: a leaf file, a
-// journal position, or the revisions/ and tasks/ subtrees.
-func (a *app) resolveInRun(n node, p string, segs []string) (node, error) {
+// resolveInProcess resolves the segments beneath a process directory: a leaf
+// file, a journal position, or the revisions/ and tasks/ subtrees.
+func (a *app) resolveInProcess(n node, p string, segs []string) (node, error) {
 	switch head := segs[0]; head {
 	case "status", "message", "answer", "error", "manifest":
 		if len(segs) > 1 {
 			return node{}, notDir(p)
 		}
-		n.kind, n.file, n.path = nodeRunFile, head, n.path+"/"+head
+		n.kind, n.file, n.path = nodeProcessFile, head, n.path+"/"+head
 		return n, nil
 	case "revisions":
 		n.kind, n.path = nodeRevisions, n.path+"/revisions"
@@ -179,7 +179,7 @@ func (a *app) resolveInRun(n node, p string, segs []string) (node, error) {
 			return n, nil
 		}
 		revision, err := strconv.ParseUint(segs[1], 10, 64)
-		if err != nil || revision < 1 || revision > n.run.Revision {
+		if err != nil || revision < 1 || revision > n.process.Revision {
 			return node{}, noEnt(p)
 		}
 		n.kind, n.revision, n.path = nodeRevision, revision, n.path+"/"+segs[1]
@@ -192,7 +192,7 @@ func (a *app) resolveInRun(n node, p string, segs []string) (node, error) {
 		if len(segs) == 1 {
 			return n, nil
 		}
-		task, err := matchTask(n.run, segs[1], p)
+		task, err := matchTask(n.process, segs[1], p)
 		if err != nil {
 			return node{}, err
 		}
@@ -202,7 +202,7 @@ func (a *app) resolveInRun(n node, p string, segs []string) (node, error) {
 		n.kind, n.task, n.path = nodeTask, task, n.path+"/"+task.ID
 		return n, nil
 	default:
-		n.revision = n.run.Revision
+		n.revision = n.process.Revision
 		return entryNode(n, p, head, segs[1:])
 	}
 }
@@ -217,7 +217,7 @@ func entryNode(n node, p, seg string, rest []string) (node, error) {
 	if err != nil {
 		return node{}, noEnt(p)
 	}
-	for _, entry := range effectiveEntries(n.run.Entries, n.revision) {
+	for _, entry := range effectiveEntries(n.process.Entries, n.revision) {
 		if entry.Position == position {
 			n.kind, n.entry, n.path = nodeEntry, entry, n.path+"/"+seg
 			return n, nil
@@ -274,33 +274,33 @@ func (a *app) session(ctx context.Context, seg, p string) (client.SessionLog, er
 	return a.client.Session(ctx, id)
 }
 
-func matchRun(log client.SessionLog, seg, p string) (client.ProcessLog, error) {
+func matchProcess(log client.SessionLog, seg, p string) (client.ProcessLog, error) {
 	ids := make([]string, 0, len(log.Processes))
-	for _, run := range log.Processes {
-		ids = append(ids, run.ID)
+	for _, proc := range log.Processes {
+		ids = append(ids, proc.ID)
 	}
 	id, err := matchID(ids, seg, p)
 	if err != nil {
 		return client.ProcessLog{}, err
 	}
-	for _, run := range log.Processes {
-		if run.ID == id {
-			return run, nil
+	for _, proc := range log.Processes {
+		if proc.ID == id {
+			return proc, nil
 		}
 	}
 	return client.ProcessLog{}, noEnt(p)
 }
 
-func matchTask(run client.ProcessLog, seg, p string) (client.Task, error) {
-	ids := make([]string, 0, len(run.Tasks))
-	for _, task := range run.Tasks {
+func matchTask(proc client.ProcessLog, seg, p string) (client.Task, error) {
+	ids := make([]string, 0, len(proc.Tasks))
+	for _, task := range proc.Tasks {
 		ids = append(ids, task.ID)
 	}
 	id, err := matchID(ids, seg, p)
 	if err != nil {
 		return client.Task{}, err
 	}
-	for _, task := range run.Tasks {
+	for _, task := range proc.Tasks {
 		if task.ID == id {
 			return task, nil
 		}
@@ -331,7 +331,7 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		for _, summary := range summaries {
 			entries = append(entries, lsEntry{
 				name: summary.ID + "/",
-				long: fmt.Sprintf("%s/  %2d runs  %s  %s",
+				long: fmt.Sprintf("%s/  %2d processes  %s  %s",
 					summary.ID, summary.ProcessCount,
 					summary.UpdatedAt.Format("2006-01-02 15:04:05"),
 					quoteTitle(truncate(summary.Title, 48))),
@@ -354,28 +354,28 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		return entries, nil
 	case nodeSession:
 		entries := []lsEntry{{name: "history", long: fmt.Sprintf("history  %d turns", len(n.log.History))}}
-		for _, run := range n.log.Processes {
-			long := run.ID + "/" + strings.TrimPrefix(processLine(run.Process), run.ID)
-			entries = append(entries, lsEntry{name: run.ID + "/", long: long})
+		for _, proc := range n.log.Processes {
+			long := proc.ID + "/" + strings.TrimPrefix(processLine(proc.Process), proc.ID)
+			entries = append(entries, lsEntry{name: proc.ID + "/", long: long})
 		}
 		return entries, nil
-	case nodeRun:
-		entries := make([]lsEntry, 0, len(runFiles)+2)
-		for _, file := range runFiles {
-			entries = append(entries, lsEntry{name: file, long: runFileLong(n.run, file)})
+	case nodeProcess:
+		entries := make([]lsEntry, 0, len(processFiles)+2)
+		for _, file := range processFiles {
+			entries = append(entries, lsEntry{name: file, long: processFileLong(n.process, file)})
 		}
 		entries = append(entries,
-			lsEntry{name: "revisions/", long: fmt.Sprintf("revisions/  %d", n.run.Revision)},
-			lsEntry{name: "tasks/", long: fmt.Sprintf("tasks/  %d", len(n.run.Tasks))},
+			lsEntry{name: "revisions/", long: fmt.Sprintf("revisions/  %d", n.process.Revision)},
+			lsEntry{name: "tasks/", long: fmt.Sprintf("tasks/  %d", len(n.process.Tasks))},
 		)
-		for _, entry := range effectiveEntries(n.run.Entries, n.run.Revision) {
+		for _, entry := range effectiveEntries(n.process.Entries, n.process.Revision) {
 			entries = append(entries, lsEntry{name: strconv.Itoa(entry.Position), long: renderEntry(entry, 96)})
 		}
 		return entries, nil
 	case nodeRevisions:
-		entries := make([]lsEntry, 0, n.run.Revision)
-		for revision := uint64(1); revision <= n.run.Revision; revision++ {
-			count := len(effectiveEntries(n.run.Entries, revision))
+		entries := make([]lsEntry, 0, n.process.Revision)
+		for revision := uint64(1); revision <= n.process.Revision; revision++ {
+			count := len(effectiveEntries(n.process.Entries, revision))
 			entries = append(entries, lsEntry{
 				name: fmt.Sprintf("%d/", revision),
 				long: fmt.Sprintf("%d/  %d entries", revision, count),
@@ -384,12 +384,12 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		return entries, nil
 	case nodeRevision:
 		var entries []lsEntry
-		for _, entry := range effectiveEntries(n.run.Entries, n.revision) {
+		for _, entry := range effectiveEntries(n.process.Entries, n.revision) {
 			entries = append(entries, lsEntry{name: strconv.Itoa(entry.Position), long: renderEntry(entry, 96)})
 		}
 		return entries, nil
 	case nodeTasks:
-		tasks := append([]client.Task(nil), n.run.Tasks...)
+		tasks := append([]client.Task(nil), n.process.Tasks...)
 		sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.Before(tasks[j].CreatedAt) })
 		entries := make([]lsEntry, 0, len(tasks))
 		for _, task := range tasks {
@@ -406,8 +406,8 @@ func fileLong(n node) string {
 	switch n.kind {
 	case nodeHistory:
 		return fmt.Sprintf("history  %d turns", len(n.log.History))
-	case nodeRunFile:
-		return runFileLong(n.run, n.file)
+	case nodeProcessFile:
+		return processFileLong(n.process, n.file)
 	case nodeEntry:
 		return renderEntry(n.entry, 96)
 	case nodeTask:
@@ -418,18 +418,18 @@ func fileLong(n node) string {
 	return path.Base(n.path)
 }
 
-func runFileLong(run client.ProcessLog, file string) string {
+func processFileLong(proc client.ProcessLog, file string) string {
 	switch file {
 	case "status":
-		return fmt.Sprintf("%-9s %s (attempt %d, revision %d)", file, run.Status, run.Attempt, run.Revision)
+		return fmt.Sprintf("%-9s %s (attempt %d, revision %d)", file, proc.Status, proc.Attempt, proc.Revision)
 	case "message":
-		return fmt.Sprintf("%-9s %s", file, truncate(run.Message, 72))
+		return fmt.Sprintf("%-9s %s", file, truncate(proc.Message, 72))
 	case "answer":
-		return fmt.Sprintf("%-9s %s", file, truncate(run.Answer, 72))
+		return fmt.Sprintf("%-9s %s", file, truncate(proc.Answer, 72))
 	case "error":
-		return fmt.Sprintf("%-9s %s", file, truncate(run.Error, 72))
+		return fmt.Sprintf("%-9s %s", file, truncate(proc.Error, 72))
 	case "manifest":
-		return fmt.Sprintf("%-9s %s", file, compact(run.Manifest, 72))
+		return fmt.Sprintf("%-9s %s", file, compact(proc.Manifest, 72))
 	}
 	return file
 }
@@ -448,7 +448,8 @@ func taskLine(task client.Task) string {
 // --- file contents ---
 
 // catLines renders a file node's content as lines: the conversation for
-// history, the bare value for a run's leaf files, pretty JSON for entries,
+// history, the bare value for a process's leaf files, pretty JSON for
+// entries,
 // tasks, and programs.
 func catLines(n node) ([]string, error) {
 	switch n.kind {
@@ -458,18 +459,18 @@ func catLines(n node) ([]string, error) {
 			lines = append(lines, fmt.Sprintf("%s: %s", message.Role, message.Content))
 		}
 		return lines, nil
-	case nodeRunFile:
+	case nodeProcessFile:
 		switch n.file {
 		case "status":
-			return []string{n.run.Status}, nil
+			return []string{n.process.Status}, nil
 		case "message":
-			return valueLines(n.run.Message), nil
+			return valueLines(n.process.Message), nil
 		case "answer":
-			return valueLines(n.run.Answer), nil
+			return valueLines(n.process.Answer), nil
 		case "error":
-			return valueLines(n.run.Error), nil
+			return valueLines(n.process.Error), nil
 		case "manifest":
-			return jsonLines(n.run.Manifest)
+			return jsonLines(n.process.Manifest)
 		}
 	case nodeEntry:
 		return jsonLines(n.entry)
