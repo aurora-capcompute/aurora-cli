@@ -413,7 +413,7 @@ func fileLong(n node) string {
 	case nodeTask:
 		return taskLine(n.task)
 	case nodeProgram:
-		return fmt.Sprintf("%s  %s", n.program.ID, truncate(n.program.Digest, 16))
+		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), truncate(n.program.Description, 56))
 	}
 	return path.Base(n.path)
 }

@@ -111,10 +111,15 @@ type JournalEntry struct {
 	Compensates *int    `json:"compensates,omitempty"`
 }
 
-// Program is one loaded program artifact.
+// Program is one loaded program artifact, with the interface it bundles: what
+// its input message and answer look like (JSON Schemas), so a caller knows what
+// to pass and what comes back without reading the wasm.
 type Program struct {
-	ID     string `json:"id"`
-	Digest string `json:"digest"`
+	ID          string          `json:"id"`
+	Digest      string          `json:"digest"`
+	Description string          `json:"description"`
+	Input       json.RawMessage `json:"input"`
+	Output      json.RawMessage `json:"output"`
 }
 
 type Resolution struct {

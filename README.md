@@ -13,7 +13,8 @@ virtual filesystem — `/proc` for agents:
 
 ```
 /                     the tenant: sessions, plus programs/
-/programs/agent       loaded program artifacts
+/programs/agent       a loaded program: cat it for the interface it bundles
+                      (description + input/output schemas — what to pass)
 /ses_x                a session: history + its processes
 /ses_x/proc_y         a process: status message answer error manifest,
                       journal positions 0 1 2 …, revisions/, tasks/
