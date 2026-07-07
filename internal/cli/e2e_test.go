@@ -71,13 +71,13 @@ func buildStack(t *testing.T) (string, string) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		cargo := exec.CommandContext(ctx, "cargo", "build", "--release", "--target", "wasm32-wasip1", "-p", "agent-brain")
+		cargo := exec.CommandContext(ctx, "cargo", "build", "--release", "--target", "wasm32-wasip1", "-p", "agent")
 		cargo.Dir = brains
 		if out, err := cargo.CombinedOutput(); err != nil {
 			stackErr = fmt.Errorf("build agent program: %v\n%s", err, out)
 			return
 		}
-		agentWasm = filepath.Join(brains, "target", "wasm32-wasip1", "release", "agent_brain.wasm")
+		agentWasm = filepath.Join(brains, "target", "wasm32-wasip1", "release", "agent.wasm")
 	})
 	if stackErr != nil {
 		t.Skipf("full stack unavailable: %v", stackErr)
@@ -182,6 +182,9 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(programsDir, "agent.wasm"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(programsDir, "agent.json"), []byte(`{"description":"the agent","input":{"type":"string"},"output":{"type":"string"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	llm := scriptedLLM(t)
@@ -308,6 +311,9 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(programsDir, "agent.wasm"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(programsDir, "agent.json"), []byte(`{"description":"the agent","input":{"type":"string"},"output":{"type":"string"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
