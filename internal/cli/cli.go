@@ -32,7 +32,7 @@ The distribution is a virtual filesystem:
   /                     the tenant: sessions, plus programs/
   /programs/agent       loaded program artifacts
   /ses_x                a session: history + its processes
-  /ses_x/proc_y         a process: status message answer error manifest,
+  /ses_x/proc_y         a process: status input answer error manifest,
                         journal positions 0 1 2 …, revisions/, tasks/
   /ses_x/proc_y/17      one journal entry (cat it)
   /ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
@@ -50,7 +50,7 @@ id prefixes resolve):
   diff <revA> <revB>           where a process's two revisions diverge
 
 Act (history is append-only: there is no rm — these are the only writes):
-  spawn <message> [-manifest f|-] [-new] [-detach]
+  spawn <input> [-manifest f|-] [-new] [-detach]
                                spawn a process in the current session and
                                follow it to its answer (-new: fresh session +
                                cd; no -manifest: the session's is inherited)
@@ -591,9 +591,9 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: spawn <message> [-manifest file.json|-] [-new] [-detach]")
+		return errors.New("usage: spawn <input> [-manifest file.json|-] [-new] [-detach]")
 	}
-	message := strings.Join(rest, " ")
+	input := strings.Join(rest, " ")
 
 	manifest, err := readManifest(*manifestPath)
 	if err != nil {
@@ -627,7 +627,7 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 		}
 	}
 
-	process, err := a.client.CreateProcess(ctx, sessionID, message, manifest)
+	process, err := a.client.CreateProcess(ctx, sessionID, input, manifest)
 	if err != nil {
 		return err
 	}
@@ -921,7 +921,7 @@ func processLine(process client.Process) string {
 	if process.Error != "" {
 		extra = "  ! " + truncate(process.Error, 60)
 	}
-	return fmt.Sprintf("%s  %-16s %s%s", process.ID, process.Status, truncate(process.Message, 48), extra)
+	return fmt.Sprintf("%s  %-16s %s%s", process.ID, process.Status, truncate(process.Input, 48), extra)
 }
 
 func renderEntry(entry client.JournalEntry, limit int) string {

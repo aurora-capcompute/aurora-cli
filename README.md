@@ -16,10 +16,10 @@ virtual filesystem — `/proc` for agents:
 /programs/agent       a loaded program: cat it for the interface it bundles
                       (description + input/output schemas — what to pass)
 /ses_x                a session: history + its processes
-/ses_x/proc_y         a process: status message answer error manifest,
-                      journal positions 0 1 2 …, revisions/, tasks/
-/ses_x/proc_y/17      one journal entry (cat it)
-/ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
+/ses_x/proc_y         a process: status input answer error manifest,
+                      revisions/, tasks/
+/ses_x/proc_y/revisions/3      a revision: its journal positions 0 1 2 …
+/ses_x/proc_y/revisions/2/17   one journal entry, as revision 2 saw it (cat it)
 /ses_x/proc_y/tasks/task_z     a durable task; ls -l shows -> its position,
                                because a task IS its open intent's park
 ```
@@ -32,14 +32,14 @@ The commands are the shell's own. Paths are absolute or relative to a
 Navigate and read:
   pwd · cd [path|-] · ls [path] [-l] · cat <path>...
   tail [path] [-n N]           the last N entries: recent processes of a
-                               session, newest journal entries of a process
+                               session, newest journal entries of a revision
   tree [path]                  the delegation tree of processes
   stat <path>                  detailed JSON for any node
   diff <revA> <revB>           where a process's two revisions diverge —
                                the shared prefix, then - rolled back / + re-run
 
 Act (history is append-only: there is no rm — these are the only writes):
-  spawn <message> [-manifest f|-] [-new] [-detach]
+  spawn <input> [-manifest f|-] [-new] [-detach]
   mkdir [-tag k=v ...]         create a session, print its id
   kill [process] · retry [-restart] [process]
   approve <task> [-reason] · deny <task> [-reason]

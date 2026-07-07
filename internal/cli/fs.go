@@ -6,10 +6,10 @@ package cli
 //	/                    the tenant: sessions, plus programs/
 //	/programs/agent      loaded program artifacts
 //	/ses_x               a session: history + its processes
-//	/ses_x/proc_y        a process: status/message/answer/error/manifest files,
-//	                     journal positions 0 1 2 …, revisions/, tasks/
-//	/ses_x/proc_y/17     one journal entry (the current revision's view)
-//	/ses_x/proc_y/revisions/2/17   the entry as revision 2 saw it
+//	/ses_x/proc_y        a process: status/input/answer/error/manifest files,
+//	                     revisions/, tasks/
+//	/ses_x/proc_y/revisions/3      a revision: its journal positions 0 1 2 …
+//	/ses_x/proc_y/revisions/2/17   one journal entry, as revision 2 saw it
 //	/ses_x/proc_y/tasks/task_z     a durable task, anchored -> its position
 //
 // resolveNode turns a path into a typed node, fetching what it needs from
@@ -46,8 +46,10 @@ const (
 	nodeTask
 )
 
-// processFiles are the leaf files every process directory carries.
-var processFiles = []string{"status", "message", "answer", "error", "manifest"}
+// processFiles are the leaf files every process directory carries. Journal
+// entries are not here: revisions are the process's top-level object, so an
+// entry is reached only through revisions/<r>/<position>.
+var processFiles = []string{"status", "input", "answer", "error", "manifest"}
 
 // node is one resolved path: its kind plus the payloads fetched on the way
 // down (the session log for anything at or below a session, the process for
@@ -164,10 +166,11 @@ func (a *app) resolveNode(ctx context.Context, arg string) (node, error) {
 }
 
 // resolveInProcess resolves the segments beneath a process directory: a leaf
-// file, a journal position, or the revisions/ and tasks/ subtrees.
+// file, or the revisions/ and tasks/ subtrees. Journal entries live under
+// revisions/<r>/, never directly in the process directory.
 func (a *app) resolveInProcess(n node, p string, segs []string) (node, error) {
 	switch head := segs[0]; head {
-	case "status", "message", "answer", "error", "manifest":
+	case "status", "input", "answer", "error", "manifest":
 		if len(segs) > 1 {
 			return node{}, notDir(p)
 		}
@@ -202,8 +205,7 @@ func (a *app) resolveInProcess(n node, p string, segs []string) (node, error) {
 		n.kind, n.task, n.path = nodeTask, task, n.path+"/"+task.ID
 		return n, nil
 	default:
-		n.revision = n.process.Revision
-		return entryNode(n, p, head, segs[1:])
+		return node{}, noEnt(p)
 	}
 }
 
@@ -360,6 +362,9 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		}
 		return entries, nil
 	case nodeProcess:
+		// Only the leaf files plus revisions/ and tasks/. Journal entries are
+		// not listed here — revisions are the process's top-level object, so an
+		// entry appears under revisions/<r>/, never directly in the process dir.
 		entries := make([]lsEntry, 0, len(processFiles)+2)
 		for _, file := range processFiles {
 			entries = append(entries, lsEntry{name: file, long: processFileLong(n.process, file)})
@@ -368,9 +373,6 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 			lsEntry{name: "revisions/", long: fmt.Sprintf("revisions/  %d", n.process.Revision)},
 			lsEntry{name: "tasks/", long: fmt.Sprintf("tasks/  %d", len(n.process.Tasks))},
 		)
-		for _, entry := range effectiveEntries(n.process.Entries, n.process.Revision) {
-			entries = append(entries, lsEntry{name: strconv.Itoa(entry.Position), long: renderEntry(entry, 96)})
-		}
 		return entries, nil
 	case nodeRevisions:
 		entries := make([]lsEntry, 0, n.process.Revision)
@@ -422,8 +424,8 @@ func processFileLong(proc client.ProcessLog, file string) string {
 	switch file {
 	case "status":
 		return fmt.Sprintf("%-9s %s (attempt %d, revision %d)", file, proc.Status, proc.Attempt, proc.Revision)
-	case "message":
-		return fmt.Sprintf("%-9s %s", file, truncate(proc.Message, 72))
+	case "input":
+		return fmt.Sprintf("%-9s %s", file, truncate(proc.Input, 72))
 	case "answer":
 		return fmt.Sprintf("%-9s %s", file, truncate(proc.Answer, 72))
 	case "error":
@@ -463,8 +465,8 @@ func catLines(n node) ([]string, error) {
 		switch n.file {
 		case "status":
 			return []string{n.process.Status}, nil
-		case "message":
-			return valueLines(n.process.Message), nil
+		case "input":
+			return valueLines(n.process.Input), nil
 		case "answer":
 			return valueLines(n.process.Answer), nil
 		case "error":

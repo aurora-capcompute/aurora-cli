@@ -49,7 +49,7 @@ type SessionLog struct {
 type Process struct {
 	ID            string          `json:"id"`
 	SessionID     string          `json:"session_id"`
-	Message       string          `json:"message"`
+	Input         string          `json:"input"`
 	Status        string          `json:"status"`
 	Attempt       int             `json:"attempt"`
 	Revision      uint64          `json:"revision"`
@@ -233,8 +233,8 @@ func (c *Client) Session(ctx context.Context, id string) (SessionLog, error) {
 	return out, err
 }
 
-func (c *Client) CreateProcess(ctx context.Context, sessionID, message string, manifest json.RawMessage) (Process, error) {
-	body := map[string]any{"message": message}
+func (c *Client) CreateProcess(ctx context.Context, sessionID, input string, manifest json.RawMessage) (Process, error) {
+	body := map[string]any{"input": input}
 	if len(manifest) > 0 {
 		body["manifest"] = manifest
 	}

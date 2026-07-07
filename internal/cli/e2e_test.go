@@ -245,24 +245,36 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatalf("cat history = %q", got)
 	}
 
-	// The process directory is the journal: leaf files plus one entry per
-	// syscall, rendered as the narrative by ls -l.
+	// The process directory carries the leaf files plus revisions/ and tasks/;
+	// the journal itself is one object down, under revisions/<r>/. Entries are
+	// not listed directly in the process directory.
 	shown := aurora(t, "ls", "-l", processID)
-	for _, want := range []string{"status", "revisions/", "tasks/", "sys.input", "openai.chat", "sys.timer", "sys.output"} {
+	for _, want := range []string{"status", "input", "answer", "revisions/", "tasks/"} {
 		if !strings.Contains(shown, want) {
 			t.Fatalf("ls -l process missing %s:\n%s", want, shown)
 		}
 	}
+	if strings.Contains(shown, "sys.input") || strings.Contains(shown, "openai.chat") {
+		t.Fatalf("process dir should not list journal entries:\n%s", shown)
+	}
 	if got := aurora(t, "cat", processID+"/answer"); !strings.Contains(got, "woke up after the nap") {
 		t.Fatalf("cat answer = %q", got)
 	}
-	if got := aurora(t, "cat", processID+"/0"); !strings.Contains(got, "sys.input") {
+
+	// The journal is rendered as the narrative by ls -l on a revision.
+	rev := aurora(t, "ls", "-l", processID+"/revisions/1")
+	for _, want := range []string{"sys.input", "openai.chat", "sys.timer", "sys.output"} {
+		if !strings.Contains(rev, want) {
+			t.Fatalf("ls -l revision missing %s:\n%s", want, rev)
+		}
+	}
+	if got := aurora(t, "cat", processID+"/revisions/1/0"); !strings.Contains(got, "sys.input") {
 		t.Fatalf("cat entry 0 = %q", got)
 	}
 
 	// tail shows the newest entries — the answer being recorded.
-	if got := aurora(t, "tail", "-n", "2", processID); !strings.Contains(got, "sys.output") {
-		t.Fatalf("tail process = %q", got)
+	if got := aurora(t, "tail", "-n", "2", processID+"/revisions/1"); !strings.Contains(got, "sys.output") {
+		t.Fatalf("tail revision = %q", got)
 	}
 
 	// The timer task is anchored to its journal position (a symlink in
@@ -370,11 +382,12 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatalf("deny = %q", got)
 	}
 	// The denial fails the cognition syscall; the guest aborts and the
-	// process finishes failed, with the reason on the journal.
+	// process finishes failed. The denial (with its reason) is recorded on the
+	// task; the failure reason also reaches the process error and the journal
+	// (now under revisions/, not the process directory).
 	waitStatus(t, processID, "failed")
-	journal := aurora(t, "ls", "-l", processID)
-	if !strings.Contains(journal, "denied") || !strings.Contains(journal, "not today") {
-		t.Fatalf("journal after deny:\n%s", journal)
+	if task := aurora(t, "cat", processID+"/tasks/"+taskID); !strings.Contains(task, "denied") || !strings.Contains(task, "not today") {
+		t.Fatalf("task after deny:\n%s", task)
 	}
 }
 
