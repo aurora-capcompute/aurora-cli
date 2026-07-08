@@ -30,7 +30,7 @@ type Message struct {
 }
 
 type SessionSummary struct {
-	ID              string            `json:"id"`
+	ID string `json:"id"`
 	// Name is the session's explicit handle (empty if unnamed — the id serves).
 	Name            string            `json:"name,omitempty"`
 	Title           string            `json:"title"`
