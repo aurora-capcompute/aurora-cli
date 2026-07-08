@@ -76,15 +76,6 @@ type ProcessLog struct {
 	Tasks           []Task         `json:"tasks,omitempty"`
 }
 
-// Terminal reports whether the process reached a final state.
-func (p Process) Terminal() bool {
-	switch p.Status {
-	case "completed", "failed", "stopped", "interrupted", "compensated":
-		return true
-	}
-	return false
-}
-
 // Parked reports whether the process is durably suspended awaiting
 // out-of-band resolution.
 func (p Process) Parked() bool {

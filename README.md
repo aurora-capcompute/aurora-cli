@@ -39,8 +39,9 @@ Navigate and read:
                                the shared prefix, then - rolled back / + re-run
 
 Act (history is append-only: there is no rm — these are the only writes):
-  spawn <input> [-manifest f|-] [-new] [-detach]
-  mkdir [-tag k=v ...]         create a session, print its id
+  spawn <input> [-manifest f|-] [-detach]
+  mkdir [name] [-tag k=v ...]  create a session, print its handle
+  mv <session> <new-name>      rename a session
   kill [process] · retry [-restart] [process]
   approve <task> [-reason] · deny <task> [-reason]
   resolve <task> -decision d [-data json] [-reason] [-token t]
@@ -55,9 +56,10 @@ is line-oriented and pipeable, so external tools (`jq`, `tv`, `grep`) compose.
 
 `spawn` starts a process in the current session, then polls its status to
 completion and prints the final answer. The manifest — the process's syscall
-grant set — is passed once with `-manifest` (a file, or `-` for stdin) and
-then **inherited**: a spawn without one reuses the session's latest, so the
-grants are stated once per conversation, like an environment. A process
+grant set — comes from `-manifest` (a file, or `-` for stdin), else the
+`$AURORA_MANIFEST` file, else none; it is **never inherited** from an earlier
+spawn. Point `$AURORA_MANIFEST` at a file to state the grants once, like an
+environment. A process
 parked on a durable task keeps being polled — a timer resumes it by itself,
 an approval can arrive from another terminal — with a one-line hint naming
 the pending task. `kill` maps to stop: a process mid-rollback refuses it by
@@ -85,8 +87,11 @@ cat > manifest.json <<'EOF'
   ]
 }
 EOF
-aurora spawn -new -manifest manifest.json "take a nap, then report back"
-aurora spawn "now do it again"   # the session's manifest is inherited
+aurora mkdir naptime                    # create a session, prints its handle
+aurora cd naptime                       # enter it
+export AURORA_MANIFEST=manifest.json    # grants for the spawns that follow
+aurora spawn "take a nap, then report back"
+aurora spawn "now do it again"          # same manifest via $AURORA_MANIFEST
 aurora ls -l          # the session: history + its processes
 aurora cd proc        # unique prefix resolves to the process
 aurora ls -l          # the journal narrative, one line per syscall

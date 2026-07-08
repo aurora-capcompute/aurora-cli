@@ -14,9 +14,10 @@ package cli
 //
 // resolveNode turns a path into a typed node, fetching what it needs from
 // the API — one GET /v1/sessions/{id} carries everything at or below a
-// session. Segments resolve by exact id, else by unique prefix. The tree is
-// read-only by design: history is append-only, so there is no rm, mv, or
-// touch — the only writes are the verbs (spawn, kill, retry, approve, deny).
+// session. Segments resolve by exact id, else by unique prefix. Recorded
+// history is append-only, so there is no rm or touch — nothing already logged
+// can be deleted or edited; the writes are session management (mkdir, mv) and
+// the process verbs (spawn, kill, retry, approve, deny).
 
 import (
 	"context"
