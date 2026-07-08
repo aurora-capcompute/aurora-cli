@@ -79,8 +79,9 @@ cat > manifest.json <<'EOF'
   "syscalls": [
     {"syscall": "sys.timer"},
     {"syscall": "core.openaiApi", "hidden": true,
-     "settings": {"api_key": "sk-…", "default_model": "gpt-4o-mini",
-                  "require_approval": false}}
+     "base_url": "https://api.openai.com/v1", "api_key": "sk-…",
+     "default_model": "gpt-4o-mini",
+     "capabilities": [{"operation": "chat", "require_approval": false}]}
   ]
 }
 EOF

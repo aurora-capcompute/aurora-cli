@@ -199,8 +199,8 @@ func TestTerminalEndToEnd(t *testing.T) {
 	  "syscalls": [
 	    {"syscall": "sys.timer"},
 	    {"syscall": "core.openaiApi", "hidden": true,
-	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
-	                  "default_model": "stub", "require_approval": false}}
+	     "base_url": %q, "api_key": "test", "allow_insecure_http": true, "default_model": "stub",
+	     "capabilities": [{"operation": "chat", "require_approval": false}]}
 	  ]
 	}`, llm.URL+"/v1")
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
@@ -254,7 +254,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 			t.Fatalf("ls -l process missing %s:\n%s", want, shown)
 		}
 	}
-	if strings.Contains(shown, "sys.input") || strings.Contains(shown, "openai.chat") {
+	if strings.Contains(shown, "sys.input") || strings.Contains(shown, "core.openaiApi") {
 		t.Fatalf("process dir should not list journal entries:\n%s", shown)
 	}
 	if got := aurora(t, "cat", processID+"/answer"); !strings.Contains(got, "woke up after the nap") {
@@ -263,7 +263,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 
 	// The journal is rendered as the narrative by ls -l on a revision.
 	rev := aurora(t, "ls", "-l", processID+"/revisions/1")
-	for _, want := range []string{"sys.input", "openai.chat", "sys.timer", "sys.output"} {
+	for _, want := range []string{"sys.input", "core.openaiApi", "sys.timer", "sys.output"} {
 		if !strings.Contains(rev, want) {
 			t.Fatalf("ls -l revision missing %s:\n%s", want, rev)
 		}
@@ -344,8 +344,8 @@ func TestTerminalApproveDeny(t *testing.T) {
 	  "version": 4,
 	  "syscalls": [
 	    {"syscall": "core.openaiApi", "hidden": true,
-	     "settings": {"base_url": %q, "api_key": "test", "allow_insecure_http": true,
-	                  "default_model": "stub", "require_approval": true}}
+	     "base_url": %q, "api_key": "test", "allow_insecure_http": true, "default_model": "stub",
+	     "capabilities": [{"operation": "chat", "require_approval": true}]}
 	  ]
 	}`, llm.URL+"/v1")
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
@@ -359,7 +359,7 @@ func TestTerminalApproveDeny(t *testing.T) {
 	waitStatus(t, processID, "waiting_for_task")
 
 	tasks := aurora(t, "ls", "-l", processID+"/tasks")
-	if !strings.Contains(tasks, "pending") || !strings.Contains(tasks, "openai.chat") {
+	if !strings.Contains(tasks, "pending") || !strings.Contains(tasks, "core.openaiApi") {
 		t.Fatalf("tasks = %q", tasks)
 	}
 	taskID := extract(t, aurora(t, "ls", processID+"/tasks"), "")
