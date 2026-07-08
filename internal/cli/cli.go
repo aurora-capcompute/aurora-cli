@@ -652,10 +652,18 @@ func readManifest(path string) (json.RawMessage, error) {
 // continues until the process finishes.
 func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 	hinted := false
+	lastLen, shown := 0, 0
 	for {
 		process, err := a.client.GetProcess(ctx, processID)
 		if err != nil {
 			return err
+		}
+		// Surface live progress: when the journal grows, print the new syscalls
+		// the process has run so the wait shows what it is doing, not a blank
+		// screen. JournalLength (cheap) gates the fuller session read.
+		if process.JournalLength > lastLen {
+			lastLen = process.JournalLength
+			shown = a.followProgress(ctx, process.SessionID, processID, shown)
 		}
 		switch {
 		case process.Status == "completed":
@@ -678,9 +686,104 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// followProgress prints the process's new journal entries (those past `shown`)
+// as one-line "what it's doing" summaries and returns the new high-water mark.
+// Best-effort: a failed read just skips this round.
+func (a *app) followProgress(ctx context.Context, sessionID, processID string, shown int) int {
+	log, err := a.client.Session(ctx, sessionID)
+	if err != nil {
+		return shown
+	}
+	for _, p := range log.Processes {
+		if p.ID != processID {
+			continue
+		}
+		entries := effectiveEntries(p.Entries, p.Revision)
+		for _, entry := range entries[min(shown, len(entries)):] {
+			if line := progressLine(entry); line != "" {
+				a.printf("%s", line)
+			}
+		}
+		return len(entries)
+	}
+	return shown
+}
+
+// progressLine is a compact "what it's doing" summary of one journal entry — the
+// syscall and a short hint — or "" for the runtime's own plumbing, which is
+// noise during a follow.
+func progressLine(entry client.JournalEntry) string {
+	if isProgressNoise(entry.Syscall.Name) {
+		return ""
+	}
+	line := "  · " + entry.Syscall.Name
+	if hint := syscallHint(entry.Syscall.Name, entry.Syscall.Args); hint != "" {
+		line += " " + hint
+	}
+	switch entry.Outcome.Status {
+	case "failed":
+		line += " ✗ " + entry.Outcome.Code
+	case "yield":
+		line += " ⏳"
+	}
+	return line
+}
+
+// isProgressNoise reports whether a syscall is runtime plumbing not worth
+// showing in a live follow (the I/O envelope, savepoints, journaled world reads).
+func isProgressNoise(name string) bool {
+	switch name {
+	case "sys.begin", "sys.commit", "sys.input", "sys.output", "sys.now", "sys.random", "sys.log":
+		return true
+	}
+	return false
+}
+
+// syscallHint pulls a short, human-meaningful detail from a syscall's args (the
+// operation, the URL, the key) for the progress line; "" when there is none.
+func syscallHint(name string, args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return ""
+	}
+	str := func(k string) string {
+		var s string
+		_ = json.Unmarshal(m[k], &s)
+		return s
+	}
+	switch name {
+	case "core.openaiApi":
+		return str("operation")
+	case "core.internet":
+		return strings.TrimSpace(str("method") + " " + hostPath(str("url")))
+	case "core.memory":
+		return strings.TrimSpace(str("operation") + " " + str("key"))
+	case "sys.timer":
+		if label := str("label"); label != "" {
+			return label
+		}
+		return "timer"
+	case "sys.spawn":
+		return str("program")
+	}
+	return ""
+}
+
+// hostPath strips a URL's scheme for a compact progress hint.
+func hostPath(rawURL string) string {
+	s := rawURL
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	return truncate(s, 60)
 }
 
 // parkHint says what a parked process actually waits on: a timer (it fires

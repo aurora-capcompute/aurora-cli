@@ -230,6 +230,12 @@ func TestTerminalEndToEnd(t *testing.T) {
 	if !strings.Contains(sent, "timer") {
 		t.Fatalf("spawn did not surface the timer park:\n%s", sent)
 	}
+	// The wait shows live progress — the syscalls the process runs, not a blank
+	// screen. The 1s timer park guarantees the follow polls see intermediate
+	// journal state before completion.
+	if !strings.Contains(sent, "· ") {
+		t.Fatalf("spawn did not surface live progress lines:\n%s", sent)
+	}
 	processID := extract(t, sent, "process ")
 
 	// The root lists the session by its name, plus the programs directory.
