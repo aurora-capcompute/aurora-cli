@@ -31,7 +31,7 @@ The distribution is a virtual filesystem:
 
   /                     the tenant: sessions, plus programs/
   /programs/agent       loaded program artifacts
-  /ses_x                a session: history + its processes
+  /alpha                a session (its name; unnamed ones show as /ses_x)
   /ses_x/proc_y         a process: status input answer error manifest,
                         journal positions 0 1 2 …, revisions/, tasks/
   /ses_x/proc_y/17      one journal entry (cat it)
@@ -50,11 +50,13 @@ id prefixes resolve):
   diff <revA> <revB>           where a process's two revisions diverge
 
 Act (history is append-only: there is no rm — these are the only writes):
-  spawn <input> [-manifest f|-] [-new] [-detach]
-                               spawn a process in the current session and
-                               follow it to its answer (-new: fresh session +
-                               cd; no -manifest: the session's is inherited)
-  mkdir [-tag k=v ...]         create a session, print its id
+  spawn <input> [-manifest f|-] [-detach]
+                               run a process in the current session and follow
+                               it to its answer. Manifest: -manifest, else
+                               $AURORA_MANIFEST, else none — never inherited.
+  mkdir [name] [-tag k=v ...]  create a session (a directory); prints its handle
+                               — the name, or a generated id if unnamed
+  mv <session> <new-name>      rename a session
   kill [process]               stop a process (default: the cwd's)
   retry [-restart] [process]   resume (default) or restart a process
   approve <task> [-reason t]   resolve a pending task as approved
@@ -98,6 +100,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return a.spawn(ctx, rest)
 	case "mkdir":
 		return a.mkdir(ctx, rest)
+	case "mv":
+		return a.mv(ctx, rest)
 	case "kill":
 		return a.kill(ctx, rest)
 	case "retry":
@@ -185,7 +189,7 @@ func (a *app) cwd() string {
 func (a *app) cwdSession() (string, error) {
 	segs := pathSegments(a.cwd())
 	if len(segs) == 0 || segs[0] == "programs" {
-		return "", errors.New("not inside a session: cd into one, or use -new")
+		return "", errors.New("not inside a session: mkdir one and cd into it")
 	}
 	return segs[0], nil
 }
@@ -583,50 +587,27 @@ func (a *app) revisionView(ctx context.Context, arg string) (node, error) {
 
 func (a *app) spawn(ctx context.Context, args []string) error {
 	fs, server := a.flags("spawn")
-	manifestPath := fs.String("manifest", "", "path to a manifest JSON file (- reads stdin)")
+	manifestPath := fs.String("manifest", "", "path to a manifest JSON file (- reads stdin); defaults to $AURORA_MANIFEST")
 	detach := fs.Bool("detach", false, "print the process id and exit instead of following")
-	newSession := fs.Bool("new", false, "create a fresh session and cd into it first")
 	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: spawn <input> [-manifest file.json|-] [-new] [-detach]")
+		return errors.New("usage: spawn <input> [-manifest file.json|-] [-detach]")
 	}
 	input := strings.Join(rest, " ")
 
+	// The manifest is an explicit input, never inherited from the session: the
+	// -manifest flag, else $AURORA_MANIFEST, else none (a no-tools run).
 	manifest, err := readManifest(*manifestPath)
 	if err != nil {
 		return err
 	}
-
-	var sessionID string
-	if *newSession {
-		log, err := a.client.CreateSession(ctx, nil)
-		if err != nil {
-			return err
-		}
-		sessionID = log.Session.ID
-		a.ctx.PrevPath = a.cwd()
-		a.ctx.Path = "/" + sessionID
-		// Save now, not after the spawn: if starting the process fails, the
-		// cwd still points at the session that was just created.
-		if err := config.Save(a.ctx); err != nil {
-			return err
-		}
-		a.printf("session %s", sessionID)
-	} else if sessionID, err = a.cwdSession(); err != nil {
+	sessionID, err := a.cwdSession()
+	if err != nil {
 		return err
 	}
-
-	if manifest == nil {
-		// No -manifest: inherit the session's — the latest process's — so the
-		// grant set is stated once per conversation, like an environment.
-		if inherited, err := a.sessionManifest(ctx, sessionID); err == nil {
-			manifest = inherited
-		}
-	}
-
 	process, err := a.client.CreateProcess(ctx, sessionID, input, manifest)
 	if err != nil {
 		return err
@@ -638,9 +619,14 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 	return a.pollToAnswer(ctx, process.ID)
 }
 
-// readManifest loads the manifest argument: a file path, or - for stdin.
-// Empty means none was passed — the session's manifest is inherited.
+// readManifest loads the manifest: the -manifest argument (a file path, or - for
+// stdin), else $AURORA_MANIFEST (a file path). Empty everywhere means no
+// manifest — a process with no granted tools. The manifest is never inherited
+// from the session; it is an explicit input the caller sets, like an env var.
 func readManifest(path string) (json.RawMessage, error) {
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv("AURORA_MANIFEST"))
+	}
 	switch path {
 	case "":
 		return nil, nil
@@ -657,18 +643,6 @@ func readManifest(path string) (json.RawMessage, error) {
 		}
 		return raw, nil
 	}
-}
-
-// sessionManifest returns the manifest of the session's latest process.
-func (a *app) sessionManifest(ctx context.Context, sessionID string) (json.RawMessage, error) {
-	log, err := a.client.Session(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	if n := len(log.Processes); n > 0 {
-		return log.Processes[n-1].Manifest, nil
-	}
-	return nil, nil
 }
 
 // pollToAnswer polls the process's status until it reaches a terminal state,
@@ -734,18 +708,48 @@ func (a *app) parkHint(ctx context.Context, process client.Process) string {
 	return ""
 }
 
+// mkdir opens a session — a directory under the tenant. An optional name is its
+// handle (unique per tenant); without one the generated id is printed as the
+// handle to use.
 func (a *app) mkdir(ctx context.Context, args []string) error {
 	fs, server := a.flags("mkdir")
 	var tags tagFlags
 	fs.Var(&tags, "tag", "k=v tag (repeatable)")
-	if _, err := a.bind(fs, server, args); err != nil {
-		return err
-	}
-	log, err := a.client.CreateSession(ctx, tags.values)
+	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
-	a.printf("%s", log.Session.ID)
+	name := strings.TrimSpace(strings.Join(rest, " "))
+	log, err := a.client.CreateSession(ctx, name, tags.values)
+	if err != nil {
+		return err
+	}
+	a.printf("%s", sessionHandle(log.Session))
+	return nil
+}
+
+// mv renames a session — the one mutable name in the tree. Its id, and every
+// path built on it, is unchanged; only the handle moves.
+func (a *app) mv(ctx context.Context, args []string) error {
+	fs, server := a.flags("mv")
+	rest, err := a.bind(fs, server, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) < 2 {
+		return errors.New("usage: mv <session> <new-name>")
+	}
+	n, err := a.resolveNode(ctx, rest[0])
+	if err != nil {
+		return err
+	}
+	if n.kind != nodeSession {
+		return fmt.Errorf("mv: only a session can be renamed (%s is not a session)", n.path)
+	}
+	name := strings.TrimSpace(strings.Join(rest[1:], " "))
+	if _, err := a.client.RenameSession(ctx, n.log.Session.ID, name); err != nil {
+		return err
+	}
 	return nil
 }
 

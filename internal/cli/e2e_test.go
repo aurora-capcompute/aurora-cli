@@ -207,12 +207,22 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// spawn -new creates the session, cds into it, spawns the process, polls
-	// it through the timer park and fire, and prints the final answer. Flags
-	// after the message exercise interleaved parsing.
-	sent := aurora(t, "spawn", "-new", "take a nap, then report back", "-manifest", manifestPath)
-	if !strings.Contains(sent, "session ses_") || !strings.Contains(sent, "process proc_") {
-		t.Fatalf("spawn output missing ids:\n%s", sent)
+	// Sessions are explicit, named directories: mkdir then cd, like a shell.
+	if got := aurora(t, "mkdir", "nap-session"); !strings.Contains(got, "nap-session") {
+		t.Fatalf("mkdir = %q, want the handle back", got)
+	}
+	aurora(t, "cd", "nap-session")
+	sessionID := extract(t, aurora(t, "pwd"), "/")
+	if !strings.HasPrefix(sessionID, "ses_") {
+		t.Fatalf("cd nap-session did not land in a session: %q", sessionID)
+	}
+
+	// spawn runs in the current session and follows the process through the
+	// timer park and fire to its answer. Flags after the message exercise
+	// interleaved parsing.
+	sent := aurora(t, "spawn", "take a nap, then report back", "-manifest", manifestPath)
+	if !strings.Contains(sent, "process proc_") {
+		t.Fatalf("spawn output missing process id:\n%s", sent)
 	}
 	if !strings.Contains(sent, "✔ woke up after the nap") {
 		t.Fatalf("spawn did not follow to the answer:\n%s", sent)
@@ -220,17 +230,10 @@ func TestTerminalEndToEnd(t *testing.T) {
 	if !strings.Contains(sent, "timer") {
 		t.Fatalf("spawn did not surface the timer park:\n%s", sent)
 	}
-	sessionID := extract(t, sent, "session ")
 	processID := extract(t, sent, "process ")
 
-	// -new cd'ed into the fresh session, like a shell.
-	if got := aurora(t, "pwd"); !strings.Contains(got, "/"+sessionID) {
-		t.Fatalf("pwd = %q, want the new session as cwd", got)
-	}
-
-	// The root lists the session and the programs directory; the loaded
-	// artifact is a file under it.
-	if got := aurora(t, "ls", "/"); !strings.Contains(got, sessionID+"/") || !strings.Contains(got, "programs/") {
+	// The root lists the session by its name, plus the programs directory.
+	if got := aurora(t, "ls", "/"); !strings.Contains(got, "nap-session/") || !strings.Contains(got, "programs/") {
 		t.Fatalf("ls / = %q", got)
 	}
 	if got := aurora(t, "ls", "/programs"); !strings.Contains(got, "agent") {
@@ -309,6 +312,20 @@ func TestTerminalEndToEnd(t *testing.T) {
 	if got := aurora(t, "pwd"); !strings.Contains(got, "/"+sessionID) || strings.Contains(got, processID) {
 		t.Fatalf("pwd after cd - = %q", got)
 	}
+
+	// mv renames the session: the handle moves, the id (and every path built on
+	// it) stays. The session resolves by the new name and by its stable id.
+	aurora(t, "cd", "/")
+	aurora(t, "mv", "nap-session", "naptime")
+	if got := aurora(t, "ls", "/"); !strings.Contains(got, "naptime/") || strings.Contains(got, "nap-session/") {
+		t.Fatalf("ls after mv = %q, want naptime and not nap-session", got)
+	}
+	if got := aurora(t, "cat", "naptime/"+processID+"/status"); !strings.Contains(got, "completed") {
+		t.Fatalf("cat via the renamed session = %q", got)
+	}
+	if got := aurora(t, "cat", "/"+sessionID+"/"+processID+"/status"); !strings.Contains(got, "completed") {
+		t.Fatalf("cat via the stable id = %q", got)
+	}
 }
 
 // The HITL loop over the wire: a manifest whose LLM grant requires approval
@@ -351,10 +368,17 @@ func TestTerminalApproveDeny(t *testing.T) {
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The manifest is an explicit input via $AURORA_MANIFEST — used by every
+	// spawn in this shell, never inherited from the session.
+	t.Setenv("AURORA_MANIFEST", manifestPath)
 
-	// Start detached: the process parks awaiting approval. -new cds into the
-	// fresh session, so later paths are relative.
-	sent := aurora(t, "spawn", "-new", "-detach", "-manifest", manifestPath, "ask the model something")
+	// Explicit named session, then spawn detached: the process parks awaiting
+	// approval.
+	if got := aurora(t, "mkdir", "hitl"); !strings.Contains(got, "hitl") {
+		t.Fatalf("mkdir = %q", got)
+	}
+	aurora(t, "cd", "hitl")
+	sent := aurora(t, "spawn", "-detach", "ask the model something")
 	processID := extract(t, sent, "process ")
 	waitStatus(t, processID, "waiting_for_task")
 
@@ -373,7 +397,9 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatalf("answer = %q", got)
 	}
 
-	// Second turn in the same session (the cwd): deny it, by bare task id.
+	// Second turn in the same session (the cwd): its manifest comes from
+	// $AURORA_MANIFEST again — not inherited from the session. Deny it, by bare
+	// task id.
 	sent = aurora(t, "spawn", "-detach", "and again")
 	processID = extract(t, sent, "process ")
 	waitStatus(t, processID, "waiting_for_task")

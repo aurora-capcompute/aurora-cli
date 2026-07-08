@@ -31,6 +31,8 @@ type Message struct {
 
 type SessionSummary struct {
 	ID              string            `json:"id"`
+	// Name is the session's explicit handle (empty if unnamed — the id serves).
+	Name            string            `json:"name,omitempty"`
 	Title           string            `json:"title"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
@@ -220,9 +222,16 @@ func (c *Client) Programs(ctx context.Context) ([]Program, error) {
 	return out, err
 }
 
-func (c *Client) CreateSession(ctx context.Context, tags map[string]string) (SessionLog, error) {
+func (c *Client) CreateSession(ctx context.Context, name string, tags map[string]string) (SessionLog, error) {
 	var out SessionLog
-	err := c.do(ctx, http.MethodPost, "/v1/sessions", map[string]any{"tags": tags}, &out)
+	err := c.do(ctx, http.MethodPost, "/v1/sessions", map[string]any{"name": name, "tags": tags}, &out)
+	return out, err
+}
+
+// RenameSession changes a session's explicit handle.
+func (c *Client) RenameSession(ctx context.Context, id, name string) (SessionLog, error) {
+	var out SessionLog
+	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(id)+"/rename", map[string]any{"name": name}, &out)
 	return out, err
 }
 

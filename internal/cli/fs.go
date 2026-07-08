@@ -255,8 +255,8 @@ func (a *app) resolveProgram(ctx context.Context, p string, segs []string) (node
 	return node{}, noEnt(p)
 }
 
-// session resolves a session segment: an exact id fetches directly, anything
-// shorter matches a unique prefix of the listed ids.
+// session resolves a session segment: an exact id fetches directly; else an
+// exact name is the primary handle; else a unique id prefix.
 func (a *app) session(ctx context.Context, seg, p string) (client.SessionLog, error) {
 	if log, err := a.client.Session(ctx, seg); err == nil {
 		return log, nil
@@ -264,6 +264,11 @@ func (a *app) session(ctx context.Context, seg, p string) (client.SessionLog, er
 	summaries, err := a.client.ListSessions(ctx)
 	if err != nil {
 		return client.SessionLog{}, err
+	}
+	for _, summary := range summaries {
+		if summary.Name != "" && summary.Name == seg {
+			return a.client.Session(ctx, summary.ID)
+		}
 	}
 	ids := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
@@ -274,6 +279,15 @@ func (a *app) session(ctx context.Context, seg, p string) (client.SessionLog, er
 		return client.SessionLog{}, err
 	}
 	return a.client.Session(ctx, id)
+}
+
+// sessionHandle is a session's display name: its explicit name, or its id when
+// unnamed.
+func sessionHandle(summary client.SessionSummary) string {
+	if summary.Name != "" {
+		return summary.Name
+	}
+	return summary.ID
 }
 
 func matchProcess(log client.SessionLog, seg, p string) (client.ProcessLog, error) {
@@ -331,10 +345,11 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.Before(summaries[j].CreatedAt) })
 		entries := []lsEntry{{name: "programs/", long: "programs/  loaded program artifacts"}}
 		for _, summary := range summaries {
+			handle := sessionHandle(summary)
 			entries = append(entries, lsEntry{
-				name: summary.ID + "/",
+				name: handle + "/",
 				long: fmt.Sprintf("%s/  %2d processes  %s  %s",
-					summary.ID, summary.ProcessCount,
+					handle, summary.ProcessCount,
 					summary.UpdatedAt.Format("2006-01-02 15:04:05"),
 					quoteTitle(truncate(summary.Title, 48))),
 			})
