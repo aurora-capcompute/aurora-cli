@@ -61,6 +61,9 @@ Act (history is append-only: there is no rm — these are the only writes):
                                run a process in the current session and follow
                                it to its answer. Manifest: -manifest, else
                                $AURORA_MANIFEST, else none — never inherited.
+                               In the input, @file.txt mentions resolve to a
+                               full path under $AURORA_WORKDIR (if set), so a
+                               filesystem-granted agent can open them.
   mkdir [name] [-tag k=v ...]  create a session (a directory); prints its handle
                                — the name, or a generated id if unnamed
   mv <session> <new-name>      rename a session
@@ -700,7 +703,9 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 	if len(rest) == 0 {
 		return errors.New("usage: spawn <input> [-manifest file.json|-] [-detach]")
 	}
-	input := strings.Join(rest, " ")
+	// Resolve @file.txt mentions to full paths under $AURORA_WORKDIR, so an
+	// agent granted a filesystem capability rooted there can open them.
+	input := expandMentions(strings.Join(rest, " "))
 
 	// The manifest is an explicit input, never inherited from the session: the
 	// -manifest flag, else $AURORA_MANIFEST, else none (a no-tools run).
