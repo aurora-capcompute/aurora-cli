@@ -27,6 +27,10 @@ import (
 
 const usage = `aurora — a shell over an aurora-dist
 
+Run one command, or start an interactive session with the same commands:
+  aurora --interactive         a REPL with a live prompt, history, and
+                               tab-completion (Ctrl-D or "exit" to leave)
+
 The distribution is a virtual filesystem:
 
   /                     the tenant: sessions, plus programs/
@@ -74,11 +78,26 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("load context: %w", err)
 	}
 	a := &app{ctx: saved, out: out}
+	if len(args) > 0 && isInteractiveFlag(args[0]) {
+		return a.repl(ctx)
+	}
 	if len(args) == 0 {
 		return a.whereami(ctx)
 	}
+	return a.dispatch(ctx, args[0], args[1:])
+}
 
-	command, rest := args[0], args[1:]
+func isInteractiveFlag(s string) bool {
+	switch s {
+	case "-i", "-interactive", "--interactive", "interactive":
+		return true
+	}
+	return false
+}
+
+// dispatch runs one command by name — the shared core of both one-shot mode and
+// the interactive REPL.
+func (a *app) dispatch(ctx context.Context, command string, rest []string) error {
 	switch command {
 	case "pwd":
 		return a.pwd(ctx, rest)
@@ -115,11 +134,10 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	case "mount":
 		return a.mount(ctx, rest)
 	case "help", "-h", "--help":
-		fmt.Fprintln(out, usage)
+		fmt.Fprintln(a.out, usage)
 		return nil
 	default:
-		fmt.Fprintln(out, usage)
-		return fmt.Errorf("unknown command %q", command)
+		return fmt.Errorf("unknown command %q (try `help`)", command)
 	}
 }
 
