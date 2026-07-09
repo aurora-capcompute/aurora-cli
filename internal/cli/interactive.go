@@ -157,18 +157,25 @@ func tokenize(line string) ([]string, error) {
 	return tokens, nil
 }
 
-// completer offers the command verbs for the first word and directory children
-// for a path argument.
+// completer offers the command verbs for the first word, files under
+// $AURORA_WORKDIR for an @-mention in a spawn input, and directory children for
+// a path argument.
 type completer struct{ app *app }
 
 func (c completer) Do(line []rune, pos int) ([][]rune, int) {
 	text := string(line[:pos])
 	start := strings.LastIndexAny(text, " \t") + 1
 	word := text[start:]
+	fields := strings.Fields(text)
+	// In a spawn input, `@` searches files under $AURORA_WORKDIR — the mention
+	// the terminal turns into a Markdown link when the line is submitted.
+	if strings.HasPrefix(word, "@") && len(fields) > 0 && fields[0] == "spawn" {
+		return c.app.completeMention(word)
+	}
 	if strings.TrimSpace(text[:start]) == "" { // completing the command verb
 		return completeFrom(replCommands, word)
 	}
-	if pathCommands[strings.Fields(text)[0]] {
+	if pathCommands[fields[0]] {
 		return c.app.completePath(word)
 	}
 	return nil, 0
