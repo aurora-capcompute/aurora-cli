@@ -106,12 +106,15 @@ cat > manifest.json <<'EOF'
   "syscalls": [
     {"syscall": "sys.timer"},
     {"syscall": "core.openaiApi", "hidden": true,
-     "base_url": "https://api.openai.com/v1", "api_key": "sk-…",
+     "base_url": "https://api.openai.com/v1", "api_key": {"secret": "OPENAI_KEY"},
      "default_model": "gpt-4o-mini",
      "capabilities": [{"operation": "chat", "require_approval": false}]}
   ]
 }
 EOF
+# api_key is a secret reference — the server resolves it from its environment,
+# so the key stays out of the manifest. Set it where aurora-dist runs:
+#   export AURORA_SECRET_OPENAI_KEY=sk-…
 aurora mkdir naptime                 # create a session, prints its handle
 aurora cd naptime                    # enter it
 export AURORA_MANIFEST=manifest.json # grants for the spawns that follow
