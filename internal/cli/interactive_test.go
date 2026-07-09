@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +61,39 @@ func TestCompleteCommands(t *testing.T) {
 	got, _ = c.Do([]rune(""), 0)
 	if len(got) != len(replCommands) {
 		t.Fatalf("complete '' = %d candidates, want %d", len(got), len(replCommands))
+	}
+}
+
+func TestPagerCommand(t *testing.T) {
+	// Precedence: $AURORA_PAGER, then $PAGER, then the "less" default.
+	t.Setenv("AURORA_PAGER", "")
+	t.Setenv("PAGER", "")
+	if got := pagerCommand(); got != "less" {
+		t.Errorf("default pager = %q, want less", got)
+	}
+	t.Setenv("PAGER", "more")
+	if got := pagerCommand(); got != "more" {
+		t.Errorf("$PAGER pager = %q, want more", got)
+	}
+	t.Setenv("AURORA_PAGER", "bat -p")
+	if got := pagerCommand(); got != "bat -p" {
+		t.Errorf("$AURORA_PAGER pager = %q, want 'bat -p'", got)
+	}
+}
+
+// When stdout isn't a terminal, page must not launch a pager — it prints the
+// lines like cat, so `aurora less x | grep y` and non-interactive use work.
+func TestPageFallsBackToPlainPrintWhenNotATTY(t *testing.T) {
+	if isTerminal(os.Stdout) {
+		t.Skip("stdout is a terminal; page would launch the pager")
+	}
+	var buf bytes.Buffer
+	a := &app{out: &buf}
+	if err := a.page([]string{"line one", "line two"}); err != nil {
+		t.Fatalf("page: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "line one") || !strings.Contains(got, "line two") {
+		t.Fatalf("page output = %q, want both lines", got)
 	}
 }
 

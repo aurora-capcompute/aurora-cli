@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -48,6 +49,8 @@ id prefixes resolve):
   cd [path|-]                  change it (no arg: /)
   ls [path] [-l]               list a directory (-l: one detailed line each)
   cat <path>...                print a file: an entry, a task, history, …
+  less <path>...               page a file through $PAGER (else less); set
+                               $AURORA_PAGER to override — for long ones
   tail [path] [-n N]           the last N entries of a directory (default 10)
   tree [path]                  the delegation tree of processes
   stat <path>                  detailed JSON for any node
@@ -107,6 +110,8 @@ func (a *app) dispatch(ctx context.Context, command string, rest []string) error
 		return a.ls(ctx, rest)
 	case "cat":
 		return a.cat(ctx, rest)
+	case "less":
+		return a.less(ctx, rest)
 	case "tail":
 		return a.tail(ctx, rest)
 	case "tree":
@@ -354,6 +359,87 @@ func (a *app) cat(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+// less shows a node's content through a pager instead of dumping it: same
+// reads as cat (an entry, a manifest, history), but a long one scrolls in the
+// pager rather than flooding the screen.
+func (a *app) less(ctx context.Context, args []string) error {
+	fs, server := a.flags("less")
+	rest, err := a.bind(fs, server, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) == 0 {
+		return errors.New("usage: less <path>...")
+	}
+	var lines []string
+	for _, target := range rest {
+		n, err := a.resolveNode(ctx, target)
+		if err != nil {
+			return err
+		}
+		l, err := catLines(n)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, l...)
+	}
+	return a.page(lines)
+}
+
+// page views lines through the user's pager — $AURORA_PAGER, else $PAGER, else
+// `less`. The content is handed over as a temp file passed as the pager's
+// argument, so any pager or editor works uniformly (less, bat, vim, nano). When
+// stdout is not a terminal (piped or redirected) paging is pointless, so the
+// lines are written straight out as cat would.
+func (a *app) page(lines []string) error {
+	if !isTerminal(os.Stdout) {
+		for _, line := range lines {
+			a.printf("%s", line)
+		}
+		return nil
+	}
+	tmp, err := os.CreateTemp("", "aurora-*.txt")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// A shell runs the command so $PAGER may carry flags ("less -R"); the temp
+	// path rides in as a positional ("$@"), never interpolated, so a path with
+	// spaces or shell metacharacters can't break the command.
+	cmd := exec.Command("sh", "-c", pagerCommand()+` "$@"`, "aurora-less", tmp.Name())
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// pagerCommand resolves the pager: $AURORA_PAGER, else $PAGER, else `less`.
+func pagerCommand() string {
+	if p := strings.TrimSpace(os.Getenv("AURORA_PAGER")); p != "" {
+		return p
+	}
+	if p := strings.TrimSpace(os.Getenv("PAGER")); p != "" {
+		return p
+	}
+	return "less"
+}
+
+// isTerminal reports whether f is a character device — a real terminal — as
+// opposed to a pipe or a regular file, so paging is only attempted when it can
+// actually be driven.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // tail prints the last N entries of a directory — the most recent processes

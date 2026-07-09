@@ -25,7 +25,7 @@ import (
 // replCommands is the verb set the completer offers and the shell recognizes on
 // top of the dispatch verbs; exit/quit are shell-only.
 var replCommands = []string{
-	"pwd", "cd", "ls", "cat", "tail", "tree", "stat", "diff",
+	"pwd", "cd", "ls", "cat", "less", "tail", "tree", "stat", "diff",
 	"spawn", "mkdir", "mv", "kill", "retry", "approve", "deny", "resolve",
 	"mount", "help", "exit", "quit",
 }
@@ -33,7 +33,7 @@ var replCommands = []string{
 // pathCommands take a path argument, so their later words complete against the
 // children of the referenced directory.
 var pathCommands = map[string]bool{
-	"cd": true, "ls": true, "cat": true, "tail": true, "tree": true,
+	"cd": true, "ls": true, "cat": true, "less": true, "tail": true, "tree": true,
 	"stat": true, "kill": true, "retry": true, "diff": true,
 }
 
