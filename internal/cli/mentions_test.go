@@ -15,13 +15,13 @@ func TestExpandMentionsUnsetWorkdir(t *testing.T) {
 	}
 }
 
-func TestExpandMentionsRelativeBecomesMarkdownLink(t *testing.T) {
+func TestExpandMentionsResolvesToFullPath(t *testing.T) {
 	t.Setenv("AURORA_WORKDIR", "/work/dir")
 	cases := map[string]string{
-		"read @file.txt":         "read [@file.txt](/work/dir/file.txt)",
-		"@file.txt":              "[@file.txt](/work/dir/file.txt)",
-		"open @sub/notes.md end": "open [@sub/notes.md](/work/dir/sub/notes.md) end",
-		"@a.txt and @b.txt":      "[@a.txt](/work/dir/a.txt) and [@b.txt](/work/dir/b.txt)",
+		"read @file.txt":         "read @/work/dir/file.txt",
+		"@file.txt":              "@/work/dir/file.txt",
+		"open @sub/notes.md end": "open @/work/dir/sub/notes.md end",
+		"@a.txt and @b.txt":      "@/work/dir/a.txt and @/work/dir/b.txt",
 	}
 	for in, want := range cases {
 		if got := expandMentions(in); got != want {
@@ -52,42 +52,28 @@ func TestExpandMentionsIgnoresEmail(t *testing.T) {
 
 func TestExpandMentionsIsIdempotent(t *testing.T) {
 	t.Setenv("AURORA_WORKDIR", "/work/dir")
-	// The @ inside a produced [@name](path) link follows a '[', not a word
-	// boundary, so a second pass leaves it alone.
+	// A resolved mention is absolute (@/work/dir/...), and an absolute mention
+	// is left untouched, so a second pass is a no-op.
 	once := expandMentions("read @file.txt")
 	if twice := expandMentions(once); twice != once {
 		t.Fatalf("expansion is not idempotent: %q -> %q", once, twice)
 	}
 }
 
-func TestExpandMentionsWrapsTargetWithSpaces(t *testing.T) {
-	t.Setenv("AURORA_WORKDIR", "/work/my dir")
-	got := expandMentions("@file.txt")
-	want := "[@file.txt](</work/my dir/file.txt>)"
-	if got != want {
-		t.Fatalf("a target with a space must be angle-wrapped: %q, want %q", got, want)
-	}
-}
-
 func TestExpandMentionsCleansTraversal(t *testing.T) {
 	t.Setenv("AURORA_WORKDIR", "/work/dir")
-	// filepath.Join cleans the target; the label keeps the raw mention.
-	if got := expandMentions("@sub/../f.txt"); got != "[@sub/../f.txt](/work/dir/f.txt)" {
-		t.Fatalf("mention target should be cleaned: %q", got)
+	// filepath.Join cleans the resolved path.
+	if got := expandMentions("@sub/../f.txt"); got != "@/work/dir/f.txt" {
+		t.Fatalf("mention should resolve cleaned: %q", got)
 	}
 }
 
 func TestExpandMentionsAbsolutizesWorkdir(t *testing.T) {
 	t.Setenv("AURORA_WORKDIR", "relative/work")
 	got := expandMentions("@file.txt")
-	open := strings.Index(got, "](")
-	if open < 0 || !strings.HasSuffix(got, ")") {
-		t.Fatalf("expected a markdown link: %q", got)
-	}
-	target := strings.TrimSuffix(got[open+2:], ")")
-	target = strings.TrimSuffix(strings.TrimPrefix(target, "<"), ">")
-	if !filepath.IsAbs(target) {
-		t.Fatalf("link target is not absolute: %q (from %q)", target, got)
+	path, ok := strings.CutPrefix(got, "@")
+	if !ok || !filepath.IsAbs(path) {
+		t.Fatalf("mention did not resolve to an absolute path: %q", got)
 	}
 }
 

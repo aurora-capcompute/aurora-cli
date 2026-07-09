@@ -61,11 +61,10 @@ Act (history is append-only: there is no rm — these are the only writes):
                                run a process in the current session and follow
                                it to its answer. Manifest: -manifest, else
                                $AURORA_MANIFEST, else none — never inherited.
-                               In the input, an @file.txt mention becomes a
-                               Markdown link to its full path under
-                               $AURORA_WORKDIR (if set) — [@file.txt](…) — so a
-                               filesystem-granted agent can open it. Interactive:
-                               type @ and Tab to search those files.
+                               In the input, @file.txt resolves to its full path
+                               under $AURORA_WORKDIR (if set) so a filesystem-
+                               granted agent can open it; interactive mode
+                               completes @ against those files on Tab.
   mkdir [name] [-tag k=v ...]  create a session (a directory); prints its handle
                                — the name, or a generated id if unnamed
   mv <session> <new-name>      rename a session

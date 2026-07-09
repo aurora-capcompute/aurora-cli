@@ -59,15 +59,14 @@ completion and prints the final answer. The manifest — the process's syscall
 grant set — comes from `-manifest` (a file, or `-` for stdin), else the
 `$AURORA_MANIFEST` file, else none; it is **never inherited** from an earlier
 spawn. Point `$AURORA_MANIFEST` at a file to state the grants once, like an
-environment. In the spawn input, an `@file.txt` mention becomes a Markdown link
-to its full path under `$AURORA_WORKDIR` — `@file.txt` becomes
-`[@file.txt](/work/dir/file.txt)`, the shape most agent harnesses use for an
-attached file — so an agent granted a filesystem capability rooted there can
-open what you name. In the interactive shell, typing `@` and a partial name
-completes against those same files (`@` then Tab searches `$AURORA_WORKDIR`),
-and the link is formed when you run the line. A mention already absolute
-(`@/etc/hosts`) or home-anchored (`@~/x`) is left untouched, and with
-`$AURORA_WORKDIR` unset nothing is rewritten. A process
+environment. In the spawn input, an `@file.txt` mention resolves to its full
+path under `$AURORA_WORKDIR` — `@file.txt` becomes `@/work/dir/file.txt` — so an
+agent granted a filesystem capability rooted there can open what you name. In
+the interactive shell, typing `@` and a partial name completes against those
+same files (`@` then Tab searches `$AURORA_WORKDIR`), and the full path is
+substituted when you run the line. A mention already absolute (`@/etc/hosts`) or
+home-anchored (`@~/x`) is left untouched, and with `$AURORA_WORKDIR` unset
+nothing is rewritten. A process
 parked on a durable task keeps being polled — a timer resumes it by itself,
 an approval can arrive from another terminal — with a one-line hint naming
 the pending task. `kill` maps to stop: a process mid-rollback refuses it by
