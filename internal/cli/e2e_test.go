@@ -115,7 +115,7 @@ func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) 
 	_ = listener.Close()
 
 	cmd := exec.Command(bin, "-addr", addr, "-programs", programsDir, "-data", dataDir)
-	cmd.Env = append(os.Environ(), "AURORA_TASK_SECRET=cli-e2e-secret")
+	cmd.Env = append(os.Environ(), "AURORA_TASK_SECRET=cli-e2e-secret-value") // >=16 bytes
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {

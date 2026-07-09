@@ -507,7 +507,26 @@ func valueLines(value string) []string {
 	if value == "" {
 		return nil
 	}
-	return strings.Split(value, "\n")
+	return strings.Split(sanitizeTerminal(value), "\n")
+}
+
+// sanitizeTerminal neutralizes control characters in guest- or model-authored
+// text before it reaches the operator's terminal. The CLI is the operator's
+// audit lens over untrusted guest activity, so an answer, error, fetched web
+// page, or journal message that smuggles ANSI/OSC escape sequences (or a
+// carriage return / backspace) could otherwise repaint or hide what a process
+// actually did. Newline and tab are preserved for layout; every other C0/C1
+// control (and DEL) becomes the visible, inert replacement rune.
+func sanitizeTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return '�'
+		}
+		return r
+	}, s)
 }
 
 func jsonLines(value any) ([]string, error) {

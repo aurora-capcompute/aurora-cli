@@ -777,18 +777,18 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		}
 		switch {
 		case process.Status == "completed":
-			a.printf("✔ %s", process.Answer)
+			a.printf("✔ %s", sanitizeTerminal(process.Answer))
 			return nil
 		case process.Status == "failed":
-			return fmt.Errorf("process failed: %s", process.Error)
+			return fmt.Errorf("process failed: %s", sanitizeTerminal(process.Error))
 		case process.Status == "stopped":
 			a.printf("■ stopped")
 			return nil
 		case process.Status == "compensated":
-			a.printf("↩ rolled back — %s", process.Answer)
+			a.printf("↩ rolled back — %s", sanitizeTerminal(process.Answer))
 			return nil
 		case process.Status == "interrupted":
-			return fmt.Errorf("process interrupted: %s", process.Error)
+			return fmt.Errorf("process interrupted: %s", sanitizeTerminal(process.Error))
 		case process.Parked() && !hinted:
 			a.printf("⏸ %s%s; still following", process.Status, a.parkHint(ctx, process))
 			hinted = true
@@ -1133,12 +1133,12 @@ func (a *app) resolve(ctx context.Context, args []string) error {
 func processLine(process client.Process) string {
 	extra := ""
 	if process.Answer != "" {
-		extra = "  " + truncate(process.Answer, 60)
+		extra = "  " + truncate(sanitizeTerminal(process.Answer), 60)
 	}
 	if process.Error != "" {
-		extra = "  ! " + truncate(process.Error, 60)
+		extra = "  ! " + truncate(sanitizeTerminal(process.Error), 60)
 	}
-	return fmt.Sprintf("%s  %-16s %s%s", process.ID, process.Status, truncate(process.Input, 48), extra)
+	return fmt.Sprintf("%s  %-16s %s%s", process.ID, process.Status, truncate(sanitizeTerminal(process.Input), 48), extra)
 }
 
 func renderEntry(entry client.JournalEntry, limit int) string {
@@ -1153,9 +1153,9 @@ func renderEntry(entry client.JournalEntry, limit int) string {
 	case "result":
 		line += " → " + compact(entry.Outcome.Result, limit)
 	case "failed":
-		line += fmt.Sprintf(" ✗ %s: %s", entry.Outcome.Code, entry.Outcome.Message)
+		line += fmt.Sprintf(" ✗ %s: %s", entry.Outcome.Code, sanitizeTerminal(entry.Outcome.Message))
 	case "yield":
-		line += " ⏳ " + entry.Outcome.Message
+		line += " ⏳ " + sanitizeTerminal(entry.Outcome.Message)
 	}
 	if len(entry.Outcome.Labels) > 0 {
 		line += "  [" + strings.Join(entry.Outcome.Labels, " ") + "]"
