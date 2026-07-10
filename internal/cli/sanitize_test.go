@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -46,5 +47,72 @@ func TestProcessLineSanitizesGuestFields(t *testing.T) {
 	})
 	if strings.ContainsRune(line, 0x1b) || strings.ContainsRune(line, '\r') {
 		t.Fatalf("processLine leaked a terminal control character: %q", line)
+	}
+}
+
+// A process answer becomes an assistant turn in session history, so `cat
+// <session>/history` renders guest-authored content. It must be sanitized just
+// like the sibling <session>/<proc>/answer view (valueLines) — otherwise the
+// same string is safe in one lens and a raw escape sink in the other.
+func TestCatHistorySanitizesGuestContent(t *testing.T) {
+	n := node{
+		kind: nodeHistory,
+		path: "/s/history",
+		log: client.SessionLog{History: []client.Message{
+			{Role: "user", Content: "what's the status?"},
+			{Role: "assistant", Content: "all\x1b[2J\x1b[31mSESSION CLEAN\x1b[0m\rHACKED"},
+		}},
+	}
+	lines, err := catLines(n)
+	if err != nil {
+		t.Fatalf("catLines: %v", err)
+	}
+	joined := strings.Join(lines, "\n")
+	if strings.ContainsRune(joined, 0x1b) || strings.ContainsRune(joined, '\r') {
+		t.Fatalf("cat of history leaked a terminal control character: %q", joined)
+	}
+	if !strings.Contains(joined, "SESSION CLEAN") {
+		t.Fatalf("sanitizing must keep the visible text, only neutralize controls: %q", joined)
+	}
+}
+
+// A lifecycle syscall published with no InputSchema (e.g. sys.output) journals
+// its args unvalidated, so a guest can land raw, non-JSON bytes as an intent.
+// Rendering that journal entry (ls/cat of a revision) must not write those bytes
+// to the terminal: json.Compact fails on them and the fallback would emit them
+// verbatim without the sanitize guard.
+func TestRenderEntrySanitizesRawJournalBytes(t *testing.T) {
+	entry := client.JournalEntry{
+		Position: 3,
+		Syscall: client.Syscall{
+			Name: "sys.output",
+			// Not valid JSON: forces compact's raw-bytes fallback.
+			Args: json.RawMessage("\x1b[2J\x1b]0;pwned\x07raw"),
+		},
+		Outcome: client.Outcome{
+			Status: "result",
+			Result: json.RawMessage("\x1b[31mraw-result\r"),
+		},
+	}
+	line := renderEntry(entry, 0)
+	if strings.ContainsRune(line, 0x1b) || strings.ContainsRune(line, '\r') || strings.ContainsRune(line, 0x07) {
+		t.Fatalf("renderEntry leaked a terminal control character: %q", line)
+	}
+}
+
+// Valid JSON args/results still render intact — the sanitize guard is a no-op on
+// them because json.Marshal already escapes control characters to \uXXXX.
+func TestRenderEntryKeepsValidJSONIntact(t *testing.T) {
+	entry := client.JournalEntry{
+		Position: 1,
+		Syscall: client.Syscall{
+			Name: "core.memory",
+			Args: json.RawMessage(`{"operation":"put","key":"notes/a"}`),
+		},
+		Outcome: client.Outcome{Status: "result", Result: json.RawMessage(`{"version":2}`)},
+	}
+	line := renderEntry(entry, 0)
+	if !strings.Contains(line, `"operation":"put"`) || !strings.Contains(line, `"version":2`) {
+		t.Fatalf("valid JSON was mangled: %q", line)
 	}
 }

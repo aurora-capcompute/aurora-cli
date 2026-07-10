@@ -474,7 +474,13 @@ func catLines(n node) ([]string, error) {
 	case nodeHistory:
 		lines := make([]string, 0, len(n.log.History))
 		for _, message := range n.log.History {
-			lines = append(lines, fmt.Sprintf("%s: %s", message.Role, message.Content))
+			// History content is guest-authored (a process answer becomes an
+			// assistant turn), so neutralize control characters before it reaches
+			// the terminal — the same guard valueLines applies to a process's leaf
+			// files. Without it, `cat`/`page` of a session's history is a raw
+			// escape-sequence sink.
+			lines = append(lines, fmt.Sprintf("%s: %s",
+				sanitizeTerminal(message.Role), sanitizeTerminal(message.Content)))
 		}
 		return lines, nil
 	case nodeProcessFile:

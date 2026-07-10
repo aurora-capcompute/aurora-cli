@@ -1189,7 +1189,13 @@ func effectiveEntries(entries []client.JournalEntry, maxRevision uint64) []clien
 }
 
 // compact renders raw JSON on one line, truncated to limit runes (0 = no
-// truncation).
+// truncation). The output is terminal-sanitized: journal args/results are
+// guest-authored, and a lifecycle syscall published with no InputSchema (e.g.
+// sys.output) journals its args unvalidated — so a guest can land raw,
+// non-JSON bytes as an intent. json.Compact then fails and the fallback writes
+// those bytes verbatim; sanitizeTerminal neutralizes any escape sequences
+// before they reach the operator's terminal. On valid JSON the control
+// characters are already \u-escaped, so this is a no-op.
 func compact(raw json.RawMessage, limit int) string {
 	if len(raw) == 0 {
 		return ""
@@ -1199,7 +1205,7 @@ func compact(raw json.RawMessage, limit int) string {
 		buf.Reset()
 		buf.Write(raw)
 	}
-	return truncate(strings.ReplaceAll(buf.String(), "\n", " "), limit)
+	return truncate(sanitizeTerminal(strings.ReplaceAll(buf.String(), "\n", " ")), limit)
 }
 
 func truncate(s string, limit int) string {
