@@ -36,6 +36,39 @@ func TestSanitizeTerminalNeutralizesControlSequences(t *testing.T) {
 	}
 }
 
+// The live spawn-follow renders a compact per-syscall hint pulled from
+// guest/model-authored args (url, key, label). It must be sanitized — a follow
+// is the operator watching an untrusted run in real time.
+func TestProgressLineSanitizesSyscallHint(t *testing.T) {
+	line := progressLine(client.JournalEntry{
+		Syscall: client.Syscall{Name: "core.internet", Args: json.RawMessage(`{"method":"GET","url":"http://x/]0;pwned"}`)},
+	})
+	if strings.ContainsRune(line, 0x1b) || strings.ContainsRune(line, '\a') {
+		t.Fatalf("progressLine leaked a terminal control character: %q", line)
+	}
+}
+
+// A require-approval task's summary is guest-influenced (e.g. the request URL);
+// it is what the operator reads to decide the approval, so `ls tasks/` must
+// neutralize escapes in it — this sink sits on the human-approval gate.
+func TestTaskLineSanitizesSummary(t *testing.T) {
+	line := taskLine(client.Task{
+		ID: "task_1", State: "pending", Syscall: client.Syscall{Name: "core.internet"},
+		Summary: "Approve GET http://x/\x1b[2K\rHACKED",
+	})
+	if strings.ContainsRune(line, 0x1b) || strings.ContainsRune(line, '\r') {
+		t.Fatalf("taskLine leaked a terminal control character: %q", line)
+	}
+}
+
+// A session title comes from the first process input; it is rendered raw in
+// `ls`/`tree`, so quoteTitle must neutralize escapes.
+func TestQuoteTitleSanitizes(t *testing.T) {
+	if got := quoteTitle("hi\x1b]0;spoof\x07"); strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, '\a') {
+		t.Fatalf("quoteTitle leaked a terminal control character: %q", got)
+	}
+}
+
 // A guest answer/input carrying an escape sequence is neutralized in the process
 // line an operator sees in `ls`/`tree`.
 func TestProcessLineSanitizesGuestFields(t *testing.T) {

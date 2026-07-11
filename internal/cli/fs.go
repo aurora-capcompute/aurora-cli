@@ -346,7 +346,10 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.Before(summaries[j].CreatedAt) })
 		entries := []lsEntry{{name: "programs/", long: "programs/  loaded program artifacts"}}
 		for _, summary := range summaries {
-			handle := sessionHandle(summary)
+			// The session name is user-supplied and is not charset-restricted, so
+			// sanitize it before it reaches the terminal (ls output and tab
+			// completion both print this).
+			handle := sanitizeTerminal(sessionHandle(summary))
 			entries = append(entries, lsEntry{
 				name: handle + "/",
 				long: fmt.Sprintf("%s/  %2d processes  %s  %s",
@@ -431,7 +434,7 @@ func fileLong(n node) string {
 	case nodeTask:
 		return taskLine(n.task)
 	case nodeProgram:
-		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), truncate(n.program.Description, 56))
+		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), sanitizeTerminal(truncate(n.program.Description, 56)))
 	}
 	return path.Base(n.path)
 }
@@ -456,7 +459,7 @@ func processFileLong(proc client.ProcessLog, file string) string {
 // identity is the open intent at its journal position, so show the link.
 func taskLine(task client.Task) string {
 	line := fmt.Sprintf("%s -> ../%d  %-9s %-14s %s",
-		task.ID, task.JournalPosition, task.State, task.Syscall.Name, truncate(task.Summary, 48))
+		task.ID, task.JournalPosition, task.State, task.Syscall.Name, sanitizeTerminal(truncate(task.Summary, 48)))
 	if task.Resolution.Decision != "" {
 		line += fmt.Sprintf("  (resolved %s by %s)", task.Resolution.Decision, task.Resolution.Actor)
 	}

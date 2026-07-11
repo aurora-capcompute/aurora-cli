@@ -841,7 +841,9 @@ func progressLine(entry client.JournalEntry) string {
 	case "yield":
 		line += " ⏳"
 	}
-	return line
+	// The hint carries guest/model-authored syscall args (url, key, label);
+	// neutralize any terminal escapes before this reaches a live follow.
+	return sanitizeTerminal(line)
 }
 
 // isProgressNoise reports whether a syscall is runtime plumbing not worth
@@ -1158,7 +1160,7 @@ func renderEntry(entry client.JournalEntry, limit int) string {
 		line += " ⏳ " + sanitizeTerminal(entry.Outcome.Message)
 	}
 	if len(entry.Outcome.Labels) > 0 {
-		line += "  [" + strings.Join(entry.Outcome.Labels, " ") + "]"
+		line += "  [" + sanitizeTerminal(strings.Join(entry.Outcome.Labels, " ")) + "]"
 	}
 	return line
 }
@@ -1219,12 +1221,14 @@ func truncate(s string, limit int) string {
 	return string(runes[:limit]) + "…"
 }
 
-// quoteTitle quotes a title for display, keeping it on one line.
+// quoteTitle quotes a title for display, keeping it on one line. The title is
+// derived from guest/model-authored input, so escapes are neutralized before it
+// reaches the terminal.
 func quoteTitle(title string) string {
 	if title == "" {
 		return ""
 	}
-	return "\"" + strings.ReplaceAll(title, "\n", " ") + "\""
+	return "\"" + strings.ReplaceAll(sanitizeTerminal(title), "\n", " ") + "\""
 }
 
 // tagFlags collects repeated -tag k=v flags.
