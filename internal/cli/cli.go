@@ -877,7 +877,9 @@ func syscallHint(name string, args json.RawMessage) string {
 	case "core.internet":
 		return strings.TrimSpace(str("method") + " " + hostPath(str("url")))
 	case "core.memory":
-		return strings.TrimSpace(str("operation") + " " + str("key"))
+		// Show the addressed scope so the activity log makes plain which
+		// compartment a read or write touched (process/session/shared:<name>).
+		return strings.TrimSpace(str("operation") + " " + strings.TrimSpace(str("scope")+" "+str("key")))
 	case "sys.timer":
 		if label := str("label"); label != "" {
 			return label
