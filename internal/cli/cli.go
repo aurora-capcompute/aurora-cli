@@ -34,8 +34,12 @@ Run one command, or start an interactive session with the same commands:
 
 The distribution is a virtual filesystem:
 
-  /                     the tenant: sessions, plus programs/
+  /                     the tenant: sessions, plus programs/ and memory/
   /programs/agent       loaded program artifacts
+  /memory               the tenant's durable memory, read-only — keys are
+                        slash-paths under p/<process>, s/<session>,
+                        shared/<space>; ls browses, cat prints a value,
+                        ls -l / stat show its version and provenance labels
   /alpha                a session (its name; unnamed ones show as /ses_x)
   /ses_x/proc_y         a process: status input answer error manifest,
                         journal positions 0 1 2 …, revisions/, tasks/
@@ -624,6 +628,12 @@ func (a *app) stat(ctx context.Context, args []string) error {
 		return a.emitJSON(map[string]any{"tasks": len(n.process.Tasks)})
 	case nodeTask:
 		return a.emitJSON(n.task)
+	case nodeMemoryDir:
+		return a.emitJSON(map[string]any{"prefix": n.memPrefix, "keys": len(n.memEntries)})
+	case nodeMemoryKey:
+		// emitJSON re-marshals, so control bytes inside the stored value surface
+		// as inert \uXXXX escapes rather than live terminal sequences.
+		return a.emitJSON(n.memValue)
 	}
 	return noEnt(n.path)
 }

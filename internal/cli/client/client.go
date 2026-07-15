@@ -122,6 +122,23 @@ type Resolution struct {
 	Reason   string          `json:"reason,omitempty"`
 }
 
+// MemoryEntry is one stored memory key with the provenance labels of its
+// value — visible in listings so a tainted value is flagged before it is read.
+type MemoryEntry struct {
+	Key    string   `json:"key"`
+	Labels []string `json:"labels,omitempty"`
+}
+
+// MemoryValue is one stored memory value with its version and provenance
+// labels. Found false means the key does not exist.
+type MemoryValue struct {
+	Key     string          `json:"key"`
+	Found   bool            `json:"found"`
+	Value   json.RawMessage `json:"value,omitempty"`
+	Version int64           `json:"version,omitempty"`
+	Labels  []string        `json:"labels,omitempty"`
+}
+
 type Task struct {
 	ID              string     `json:"id"`
 	ProcessID       string     `json:"process_id"`
@@ -210,6 +227,29 @@ func (c *Client) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 func (c *Client) Programs(ctx context.Context) ([]Program, error) {
 	var out []Program
 	err := c.do(ctx, http.MethodGet, "/v1/programs", nil, &out)
+	return out, err
+}
+
+// MemoryList lists the tenant's stored memory keys under a physical prefix
+// ("" = everything). Read-only by design: the API has no memory write — values
+// enter the store only through the journaled core.memory syscall, so the
+// terminal can inspect memory but never launder a value past taint stamping.
+func (c *Client) MemoryList(ctx context.Context, prefix string) ([]MemoryEntry, error) {
+	var out struct {
+		Keys []MemoryEntry `json:"keys"`
+	}
+	path := "/v1/memory"
+	if prefix != "" {
+		path += "?prefix=" + url.QueryEscape(prefix)
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out.Keys, err
+}
+
+// MemoryValue reads one stored memory key by its physical slash-path.
+func (c *Client) MemoryValue(ctx context.Context, key string) (MemoryValue, error) {
+	var out MemoryValue
+	err := c.do(ctx, http.MethodGet, "/v1/memory/value?key="+url.QueryEscape(key), nil, &out)
 	return out, err
 }
 

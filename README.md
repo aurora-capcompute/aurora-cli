@@ -53,6 +53,15 @@ lives on the server side; the CLI is a thin, pipeable client.
 | `stat <path>` | detailed JSON for any node |
 | `diff <revA> <revB>` | where two revisions of a process diverge |
 
+`/memory` mounts the tenant's durable memory (what agents write through
+`core.memory`) as a **read‑only** directory tree: keys are slash‑paths under
+`p/<process>`, `s/<session>`, and `shared/<space>` — `ls` browses, `cat` prints
+a value (terminal‑escape‑sanitized: values are agent‑written), and `ls -l` /
+`stat` show each value's version and provenance labels, so a value stored by a
+web‑tainted run is visibly `[untrusted_web]` before you even open it. There is
+no memory write from the CLI — values enter only through the journaled syscall,
+so provenance can't be laundered from the operator plane.
+
 **Act** (the only writes — history is append‑only, so no `rm`):
 
 | Command | What it does |
