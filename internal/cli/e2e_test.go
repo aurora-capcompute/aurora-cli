@@ -196,6 +196,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
 	  "version": 4,
+	  "program": "agent",
 	  "syscalls": [
 	    {"syscall": "sys.timer"},
 	    {"syscall": "core.openaiApi", "hidden": true,
@@ -365,6 +366,7 @@ func TestTerminalApproveDeny(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := fmt.Sprintf(`{
 	  "version": 4,
+	  "program": "agent",
 	  "syscalls": [
 	    {"syscall": "core.openaiApi", "hidden": true,
 	     "base_url": %q, "api_key": "test", "allow_insecure_http": true, "default_model": "stub",
