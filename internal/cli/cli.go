@@ -794,9 +794,6 @@ func (a *app) pollToAnswer(ctx context.Context, processID string) error {
 		case process.Status == "stopped":
 			a.printf("■ stopped")
 			return nil
-		case process.Status == "compensated":
-			a.printf("↩ rolled back — %s", sanitizeTerminal(process.Answer))
-			return nil
 		case process.Status == "interrupted":
 			return fmt.Errorf("process interrupted: %s", sanitizeTerminal(process.Error))
 		case process.Parked() && !hinted:
@@ -1159,9 +1156,6 @@ func processLine(process client.Process) string {
 
 func renderEntry(entry client.JournalEntry, limit int) string {
 	line := fmt.Sprintf("#%-3d r%-2d %-14s", entry.Position, entry.Revision, entry.Syscall.Name)
-	if entry.Compensates != nil {
-		line += fmt.Sprintf(" compensates #%d", *entry.Compensates)
-	}
 	if len(entry.Syscall.Args) > 0 {
 		line += " " + compact(entry.Syscall.Args, limit)
 	}

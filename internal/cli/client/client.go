@@ -97,11 +97,10 @@ type Outcome struct {
 }
 
 type JournalEntry struct {
-	Position    int     `json:"position"`
-	Revision    uint64  `json:"revision"`
-	Syscall     Syscall `json:"syscall"`
-	Outcome     Outcome `json:"outcome"`
-	Compensates *int    `json:"compensates,omitempty"`
+	Position int     `json:"position"`
+	Revision uint64  `json:"revision"`
+	Syscall  Syscall `json:"syscall"`
+	Outcome  Outcome `json:"outcome"`
 }
 
 // Program is one loaded program artifact, with the interface it bundles: what
