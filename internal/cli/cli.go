@@ -56,7 +56,7 @@ id prefixes resolve):
   less <path>...               page a file through $PAGER (else less); set
                                $AURORA_PAGER to override — for long ones
   tail [path] [-n N]           the last N entries of a directory (default 10)
-  tree [path]                  the delegation tree of processes
+  tree [path]                  the processes of a session
   stat <path>                  detailed JSON for any node
   diff <revA> <revB>           where a process's two revisions diverge
 
@@ -515,56 +515,46 @@ func (a *app) tree(ctx context.Context, args []string) error {
 				return err
 			}
 			a.printf("%s  %s", log.Session.ID, quoteTitle(truncate(log.Session.Title, 48)))
-			a.printTree(log, rootProcesses(log), "")
+			a.printTree(log, processIDs(log), "")
 		}
 		return nil
 	case nodeSession:
 		a.printf("%s  %s", n.log.Session.ID, quoteTitle(truncate(n.log.Session.Title, 48)))
-		a.printTree(n.log, rootProcesses(n.log), "")
+		a.printTree(n.log, processIDs(n.log), "")
 		return nil
 	case nodeProcess:
 		a.printf("%s", processLine(n.process.Process))
-		a.printTree(n.log, n.process.ChildProcessIDs, "")
 		return nil
 	default:
 		return notDir(n.path)
 	}
 }
 
-// rootProcesses lists a session's top-level processes — those not spawned by
-// another.
-func rootProcesses(log client.SessionLog) []string {
-	var roots []string
+// processIDs lists a session's processes in order.
+func processIDs(log client.SessionLog) []string {
+	ids := make([]string, 0, len(log.Processes))
 	for _, proc := range log.Processes {
-		if proc.ParentProcessID == "" {
-			roots = append(roots, proc.ID)
-		}
+		ids = append(ids, proc.ID)
 	}
-	return roots
+	return ids
 }
 
-// printTree renders processes and their spawned children with tree
-// connectors.
+// printTree renders a session's processes, one per line.
 func (a *app) printTree(log client.SessionLog, ids []string, prefix string) {
 	byID := make(map[string]client.ProcessLog, len(log.Processes))
 	for _, proc := range log.Processes {
 		byID[proc.ID] = proc
 	}
-	a.printSubtree(byID, ids, prefix)
-}
-
-func (a *app) printSubtree(byID map[string]client.ProcessLog, ids []string, prefix string) {
 	for i, id := range ids {
 		proc, ok := byID[id]
 		if !ok {
 			continue
 		}
-		connector, childPrefix := "├── ", prefix+"│   "
+		connector := "├── "
 		if i == len(ids)-1 {
-			connector, childPrefix = "└── ", prefix+"    "
+			connector = "└── "
 		}
 		a.printf("%s%s%s", prefix, connector, processLine(proc.Process))
-		a.printSubtree(byID, proc.ChildProcessIDs, childPrefix)
 	}
 }
 
@@ -603,11 +593,9 @@ func (a *app) stat(ctx context.Context, args []string) error {
 	case nodeProcess:
 		return a.emitJSON(struct {
 			client.Process
-			Parent   string   `json:"parent_process_id,omitempty"`
-			Children []string `json:"child_process_ids,omitempty"`
-			Entries  int      `json:"entries"`
-			Tasks    int      `json:"tasks"`
-		}{n.process.Process, n.process.ParentProcessID, n.process.ChildProcessIDs,
+			Entries int `json:"entries"`
+			Tasks   int `json:"tasks"`
+		}{n.process.Process,
 			len(effectiveEntries(n.process.Entries, n.process.Revision)), len(n.process.Tasks)})
 	case nodeProcessFile:
 		lines, err := catLines(n)
@@ -894,8 +882,6 @@ func syscallHint(name string, args json.RawMessage) string {
 			return label
 		}
 		return "timer"
-	case "sys.spawn":
-		return str("program")
 	}
 	return ""
 }

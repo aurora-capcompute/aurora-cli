@@ -5,7 +5,7 @@
 //
 // The read surface is deliberately small. GET /v1/sessions/{id} returns the
 // whole session log — session metadata, history, and every process with its
-// full state, delegation links, journal across all revisions, and tasks — and
+// full state, journal across all revisions, and tasks — and
 // every narrower view (the current journal, one revision, the call graph, a
 // task list) is a grouping of that one payload, computed here in the terminal.
 package client
@@ -66,14 +66,12 @@ type Process struct {
 	Manifest      json.RawMessage `json:"manifest,omitempty"`
 }
 
-// ProcessLog is a process within a session log: its snapshot plus delegation
-// links, its complete journal across all revisions, and its tasks.
+// ProcessLog is a process within a session log: its snapshot, its complete
+// journal across all revisions, and its tasks.
 type ProcessLog struct {
 	Process
-	ParentProcessID string         `json:"parent_process_id,omitempty"`
-	ChildProcessIDs []string       `json:"child_process_ids,omitempty"`
-	Entries         []JournalEntry `json:"entries"`
-	Tasks           []Task         `json:"tasks,omitempty"`
+	Entries []JournalEntry `json:"entries"`
+	Tasks   []Task         `json:"tasks,omitempty"`
 }
 
 // Parked reports whether the process is durably suspended awaiting

@@ -297,7 +297,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatalf("cat task = %q", got)
 	}
 
-	// tree renders the delegation tree; a lone process is a single node.
+	// tree renders a session's processes.
 	if got := aurora(t, "tree"); !strings.Contains(got, "completed") {
 		t.Fatalf("tree = %q", got)
 	}
