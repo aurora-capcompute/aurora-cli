@@ -34,12 +34,8 @@ Run one command, or start an interactive session with the same commands:
 
 The distribution is a virtual filesystem:
 
-  /                     the tenant: sessions, plus programs/ and memory/
+  /                     the tenant: sessions, plus programs/
   /programs/agent       loaded program artifacts
-  /memory               the tenant's durable memory, read-only — keys are
-                        slash-paths under p/<process>, s/<session>,
-                        shared/<space>; ls browses, cat prints a value,
-                        ls -l / stat show its version and provenance labels
   /alpha                a session (its name; unnamed ones show as /ses_x)
   /ses_x/proc_y         a process: status input answer error manifest,
                         journal positions 0 1 2 …, revisions/, tasks/
@@ -616,12 +612,6 @@ func (a *app) stat(ctx context.Context, args []string) error {
 		return a.emitJSON(map[string]any{"tasks": len(n.process.Tasks)})
 	case nodeTask:
 		return a.emitJSON(n.task)
-	case nodeMemoryDir:
-		return a.emitJSON(map[string]any{"prefix": n.memPrefix, "keys": len(n.memEntries)})
-	case nodeMemoryKey:
-		// emitJSON re-marshals, so control bytes inside the stored value surface
-		// as inert \uXXXX escapes rather than live terminal sequences.
-		return a.emitJSON(n.memValue)
 	}
 	return noEnt(n.path)
 }
@@ -871,12 +861,6 @@ func syscallHint(name string, args json.RawMessage) string {
 		return str("operation")
 	case "core.internet":
 		return strings.TrimSpace(str("method") + " " + hostPath(str("url")))
-	case "core.memory":
-		// Show the addressed mount so the activity log makes plain which
-		// compartment a read or write touched: process, session, or a shared
-		// space (scope "shared" plus its `space` name).
-		mount := strings.TrimSpace(str("scope") + " " + str("space"))
-		return strings.TrimSpace(str("operation") + " " + strings.TrimSpace(mount+" "+str("key")))
 	case "sys.timer":
 		if label := str("label"); label != "" {
 			return label

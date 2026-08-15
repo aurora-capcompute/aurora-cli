@@ -3,17 +3,8 @@ package cli
 // The distribution's virtual filesystem. Aurora's event-sourced state is a
 // tree, so the terminal browses it as one:
 //
-//	/                    the tenant: sessions, plus programs/ and memory/
+//	/                    the tenant: sessions, plus programs/
 //	/programs/agent      loaded program artifacts
-//	/memory              the tenant's durable memory, read-only: keys are
-//	                     slash-paths under p/<processID>, s/<sessionID>,
-//	                     shared/<space> — ls browses, cat reads a value
-//	/ses_x               a session: history + its processes
-//	/ses_x/proc_y        a process: status/input/answer/error/manifest files,
-//	                     revisions/, tasks/
-//	/ses_x/proc_y/revisions/3      a revision: its journal positions 0 1 2 …
-//	/ses_x/proc_y/revisions/2/17   one journal entry, as revision 2 saw it
-//	/ses_x/proc_y/tasks/task_z     a durable task, anchored -> its position
 //
 // resolveNode turns a path into a typed node, fetching what it needs from
 // the API — one GET /v1/sessions/{id} carries everything at or below a
@@ -49,8 +40,6 @@ const (
 	nodeRevision
 	nodeTasks
 	nodeTask
-	nodeMemoryDir
-	nodeMemoryKey
 )
 
 // processFiles are the leaf files every process directory carries. Journal
@@ -72,15 +61,11 @@ type node struct {
 	revision uint64 // nodeRevision, and nodeEntry's view
 	entry    client.JournalEntry
 	task     client.Task
-
-	memPrefix  string               // nodeMemoryDir/nodeMemoryKey: path under /memory ("" at the root)
-	memEntries []client.MemoryEntry // nodeMemoryDir: the stored keys under the prefix
-	memValue   client.MemoryValue   // nodeMemoryKey: the stored value
 }
 
 func (n node) isDir() bool {
 	switch n.kind {
-	case nodeRoot, nodePrograms, nodeSession, nodeProcess, nodeRevisions, nodeRevision, nodeTasks, nodeMemoryDir:
+	case nodeRoot, nodePrograms, nodeSession, nodeProcess, nodeRevisions, nodeRevision, nodeTasks:
 		return true
 	}
 	return false
@@ -147,9 +132,6 @@ func (a *app) resolveNode(ctx context.Context, arg string) (node, error) {
 	}
 	if segs[0] == "programs" {
 		return a.resolveProgram(ctx, p, segs)
-	}
-	if segs[0] == "memory" {
-		return a.resolveMemory(ctx, p, segs[1:])
 	}
 
 	log, err := a.session(ctx, segs[0], p)
@@ -238,42 +220,6 @@ func entryNode(n node, p, seg string, rest []string) (node, error) {
 			n.kind, n.entry, n.path = nodeEntry, entry, n.path+"/"+seg
 			return n, nil
 		}
-	}
-	return node{}, noEnt(p)
-}
-
-// resolveMemory resolves a path under /memory against the tenant's stored
-// keys. Memory keys are literal slash-paths (no id-prefix matching): a path
-// that exactly matches a stored key is that key; a path some key lives under
-// is a directory. When a name is both — key "a" beside key "a/b" — the key
-// wins (cat works), and the deeper keys stay reachable by their full paths.
-func (a *app) resolveMemory(ctx context.Context, p string, segs []string) (node, error) {
-	rel := strings.Join(segs, "/")
-	entries, err := a.client.MemoryList(ctx, rel)
-	if err != nil {
-		return node{}, err
-	}
-	n := node{path: "/memory", memPrefix: rel}
-	if rel != "" {
-		n.path += "/" + rel
-	}
-	exact := false
-	for _, entry := range entries {
-		if entry.Key == rel {
-			exact = true
-		}
-	}
-	if exact {
-		value, err := a.client.MemoryValue(ctx, rel)
-		if err != nil {
-			return node{}, err
-		}
-		n.kind, n.memValue = nodeMemoryKey, value
-		return n, nil
-	}
-	if rel == "" || len(entries) > 0 {
-		n.kind, n.memEntries = nodeMemoryDir, entries
-		return n, nil
 	}
 	return node{}, noEnt(p)
 }
@@ -395,7 +341,6 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.Before(summaries[j].CreatedAt) })
 		entries := []lsEntry{
 			{name: "programs/", long: "programs/  loaded program artifacts"},
-			{name: "memory/", long: "memory/  the tenant's durable memory (read-only)"},
 		}
 		for _, summary := range summaries {
 			// The session name is user-supplied and is not charset-restricted, so
@@ -469,93 +414,9 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 			entries = append(entries, lsEntry{name: task.ID, long: taskLine(task)})
 		}
 		return entries, nil
-	case nodeMemoryDir:
-		return memoryDirEntries(n.memPrefix, n.memEntries), nil
 	default:
 		return []lsEntry{{name: path.Base(n.path), long: fileLong(n)}}, nil
 	}
-}
-
-// memoryDirEntries computes a memory directory's immediate children from the
-// stored keys under its prefix: a first segment with deeper parts is a
-// subdirectory, an exact remainder is a key. A name that is both shows twice
-// (the key line and the dir line), so nothing is hidden. Key names and labels
-// are agent-chosen text, so both are sanitized before reaching the terminal.
-func memoryDirEntries(prefix string, stored []client.MemoryEntry) []lsEntry {
-	type child struct {
-		dir    bool
-		keys   int
-		leaf   bool
-		labels []string
-	}
-	children := map[string]*child{}
-	names := []string{}
-	for _, entry := range stored {
-		rest := entry.Key
-		if prefix != "" {
-			if rest == prefix {
-				continue // the prefix itself is also a key; resolve favors the key
-			}
-			rest = strings.TrimPrefix(rest, prefix+"/")
-		}
-		head, _, deeper := strings.Cut(rest, "/")
-		c := children[head]
-		if c == nil {
-			c = &child{}
-			children[head] = c
-			names = append(names, head)
-		}
-		if deeper {
-			c.dir = true
-			c.keys++
-		} else {
-			c.leaf = true
-			c.labels = entry.Labels
-		}
-	}
-	sort.Strings(names)
-	entries := make([]lsEntry, 0, len(names))
-	for _, name := range names {
-		c := children[name]
-		display := sanitizeTerminal(name)
-		if c.leaf {
-			long := display
-			if len(c.labels) > 0 {
-				long += "  [" + sanitizeTerminal(strings.Join(c.labels, ",")) + "]"
-			}
-			entries = append(entries, lsEntry{name: display, long: long})
-		}
-		if c.dir {
-			entries = append(entries, lsEntry{
-				name: display + "/",
-				long: fmt.Sprintf("%s/  %d keys", display, c.keys),
-			})
-		}
-	}
-	return entries
-}
-
-// fileLong is a file node's -l line.
-func fileLong(n node) string {
-	switch n.kind {
-	case nodeHistory:
-		return fmt.Sprintf("history  %d turns", len(n.log.History))
-	case nodeProcessFile:
-		return processFileLong(n.process, n.file)
-	case nodeEntry:
-		return renderEntry(n.entry, 96)
-	case nodeTask:
-		return taskLine(n.task)
-	case nodeProgram:
-		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), sanitizeTerminal(truncate(n.program.Description, 56)))
-	case nodeMemoryKey:
-		line := fmt.Sprintf("%s  v%d", sanitizeTerminal(path.Base(n.path)), n.memValue.Version)
-		if len(n.memValue.Labels) > 0 {
-			line += "  [" + sanitizeTerminal(strings.Join(n.memValue.Labels, ",")) + "]"
-		}
-		return line
-	}
-	return path.Base(n.path)
 }
 
 func processFileLong(proc client.ProcessLog, file string) string {
@@ -624,8 +485,6 @@ func catLines(n node) ([]string, error) {
 		return jsonLines(n.task)
 	case nodeProgram:
 		return jsonLines(n.program)
-	case nodeMemoryKey:
-		return memoryValueLines(n.memValue.Value)
 	}
 	if n.isDir() {
 		return nil, fmt.Errorf("%s: is a directory", n.path)
@@ -673,6 +532,23 @@ func sanitizeTerminal(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// fileLong is a file node's -l line.
+func fileLong(n node) string {
+	switch n.kind {
+	case nodeHistory:
+		return fmt.Sprintf("history  %d turns", len(n.log.History))
+	case nodeProcessFile:
+		return processFileLong(n.process, n.file)
+	case nodeEntry:
+		return renderEntry(n.entry, 96)
+	case nodeTask:
+		return taskLine(n.task)
+	case nodeProgram:
+		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), sanitizeTerminal(truncate(n.program.Description, 56)))
+	}
+	return path.Base(n.path)
 }
 
 func jsonLines(value any) ([]string, error) {

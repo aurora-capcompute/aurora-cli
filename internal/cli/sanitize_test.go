@@ -139,7 +139,7 @@ func TestRenderEntryKeepsValidJSONIntact(t *testing.T) {
 	entry := client.JournalEntry{
 		Position: 1,
 		Syscall: client.Syscall{
-			Name: "core.memory",
+			Name: "core.scratch",
 			Args: json.RawMessage(`{"operation":"put","key":"notes/a"}`),
 		},
 		Outcome: client.Outcome{Status: "result", Result: json.RawMessage(`{"version":2}`)},
