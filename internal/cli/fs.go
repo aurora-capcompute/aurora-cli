@@ -15,7 +15,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
@@ -490,22 +489,6 @@ func catLines(n node) ([]string, error) {
 		return nil, fmt.Errorf("%s: is a directory", n.path)
 	}
 	return nil, noEnt(n.path)
-}
-
-// memoryValueLines renders a stored memory value. A JSON string decodes to its
-// text — agent-written, possibly derived from untrusted web content, so it goes
-// through the same terminal sanitization as history (valueLines). Any other
-// value pretty-prints as JSON, whose own escaping keeps control bytes inert.
-func memoryValueLines(value json.RawMessage) ([]string, error) {
-	var text string
-	if json.Unmarshal(value, &text) == nil {
-		return valueLines(text), nil
-	}
-	var decoded any
-	if err := json.Unmarshal(value, &decoded); err != nil {
-		return valueLines(string(value)), nil
-	}
-	return jsonLines(decoded)
 }
 
 func valueLines(value string) []string {
