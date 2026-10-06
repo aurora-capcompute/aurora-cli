@@ -16,8 +16,8 @@ actions they request — all with familiar Unix‑style commands.
 Aurora keeps all of its state as a **tree of events** — sessions, the processes
 (agents) inside them, each process's journal of everything it did, and any pending
 approval tasks. `aurora-cli` lets you **browse that tree like a filesystem**: you
-`cd` into a session, `ls` its processes, `cat` an answer, `tree` the delegation
-graph. History is append‑only, so there's **no `rm`** — the only writes are creating
+`cd` into a session, `ls` its processes, `cat` an answer, `tree` every session
+and its processes. History is append‑only, so there's **no `rm`** — the only writes are creating
 sessions and acting on processes and tasks.
 
 It exists for two reasons: to **drive an agent from a shell**, and to be an
@@ -49,7 +49,7 @@ lives on the server side; the CLI is a thin, pipeable client.
 | `pwd` · `cd [path\|-]` · `ls [path] [-l]` | move around and list the tree |
 | `cat <path>...` · `less <path>...` | print / page a node (answer, manifest, journal entry, task) |
 | `tail [path] [-n N]` | the last N entries — recent processes, newest journal lines |
-| `tree [path]` | the delegation tree of processes |
+| `tree [path]` | sessions and their processes, as a tree |
 | `stat <path>` | detailed JSON for any node |
 | `diff <revA> <revB>` | where two revisions of a process diverge |
 
@@ -134,7 +134,7 @@ More real invocations:
 aurora -i                                 # interactive REPL
 aurora spawn "summarize @notes.txt"       # @notes.txt → $AURORA_WORKDIR/notes.txt
 aurora spawn "long job" -detach           # print the process id, don't follow
-aurora tree /                             # delegation tree of everything
+aurora tree /                             # every session and its processes
 aurora diff proc_x/revisions/1 proc_x/revisions/2
 aurora approve proc_y/tasks/task_z -reason "looks good"
 aurora ls / | jq .                        # output is pipeable
