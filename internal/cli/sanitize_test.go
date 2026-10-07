@@ -149,3 +149,19 @@ func TestRenderEntryKeepsValidJSONIntact(t *testing.T) {
 		t.Fatalf("valid JSON was mangled: %q", line)
 	}
 }
+
+// The call a human approves is shown whole — no truncation can hide the tail
+// of an argument — and stripped of terminal escapes, since the arguments are
+// guest-authored.
+func TestPendingCallShowsTheWholeCallSafely(t *testing.T) {
+	tail := "rm -rf /important"
+	args := `{"operation":"run","params":{"cmd":"` + strings.Repeat("a", 500) + tail + `"}}`
+	call := pendingCall(client.Task{Syscall: client.Syscall{Name: "core.command", Args: json.RawMessage(args)}})
+	if !strings.HasPrefix(call, "core.command ") || !strings.Contains(call, tail) {
+		t.Fatalf("pending call hides part of the arguments: %q", call)
+	}
+	raw := pendingCall(client.Task{Syscall: client.Syscall{Name: "x", Args: json.RawMessage("not json \x1b[2K\rHACKED")}})
+	if strings.ContainsRune(raw, 0x1b) || strings.ContainsRune(raw, '\r') {
+		t.Fatalf("pending call leaked a terminal control character: %q", raw)
+	}
+}

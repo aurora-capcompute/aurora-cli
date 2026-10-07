@@ -896,7 +896,8 @@ func (a *app) parkHint(ctx context.Context, process client.Process) string {
 				continue
 			}
 			if task.Syscall.Name != "sys.timer" {
-				return fmt.Sprintf(" — task %s awaits resolution (`approve %s` or `deny`)", task.ID, task.ID)
+				return fmt.Sprintf(" — task %s awaits resolution (`approve %s` or `deny`):\n    %s",
+					task.ID, task.ID, pendingCall(task))
 			}
 		}
 		return " — waiting on a timer; it fires on its own"
@@ -1063,6 +1064,7 @@ func (a *app) resolveShorthand(ctx context.Context, args []string, decision stri
 	if err != nil {
 		return err
 	}
+	a.printf("%s  %s", decision, pendingCall(task))
 	resolved, err := a.client.ResolveTask(ctx, task.ID, task.ResolutionToken, client.Resolution{
 		Decision: decision,
 		Actor:    "aurora",
@@ -1176,6 +1178,12 @@ func effectiveEntries(entries []client.JournalEntry, maxRevision uint64) []clien
 // those bytes verbatim; sanitizeTerminal neutralizes any escape sequences
 // before they reach the operator's terminal. On valid JSON the control
 // characters are already \u-escaped, so this is a no-op.
+// pendingCall is the call a task holds, as a human deciding on it should see
+// it: the syscall and its complete arguments, never a summary.
+func pendingCall(task client.Task) string {
+	return strings.TrimSpace(task.Syscall.Name + " " + compact(task.Syscall.Args, 0))
+}
+
 func compact(raw json.RawMessage, limit int) string {
 	if len(raw) == 0 {
 		return ""
