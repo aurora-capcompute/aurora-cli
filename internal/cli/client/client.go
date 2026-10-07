@@ -5,9 +5,9 @@
 //
 // The read surface is deliberately small. GET /v1/sessions/{id} returns the
 // whole session log — session metadata, history, and every process with its
-// full state, journal across all revisions, and tasks — and
-// every narrower view (the current journal, one revision, the call graph, a
-// task list) is a grouping of that one payload, computed here in the terminal.
+// full state, journal across all revisions, and tasks — and every narrower
+// view (the current journal, one revision, a task list) is a grouping of that
+// one payload, computed here in the terminal.
 package client
 
 import (
