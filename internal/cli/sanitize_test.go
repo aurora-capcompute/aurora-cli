@@ -62,7 +62,7 @@ func TestTaskLineSanitizesSummary(t *testing.T) {
 }
 
 // A session title comes from the first process input; it is rendered raw in
-// `ls`/`tree`, so quoteTitle must neutralize escapes.
+// `ls`, so quoteTitle must neutralize escapes.
 func TestQuoteTitleSanitizes(t *testing.T) {
 	if got := quoteTitle("hi\x1b]0;spoof\x07"); strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, '\a') {
 		t.Fatalf("quoteTitle leaked a terminal control character: %q", got)
@@ -70,7 +70,7 @@ func TestQuoteTitleSanitizes(t *testing.T) {
 }
 
 // A guest answer/input carrying an escape sequence is neutralized in the process
-// line an operator sees in `ls`/`tree`.
+// line an operator sees in `ls`.
 func TestProcessLineSanitizesGuestFields(t *testing.T) {
 	line := processLine(client.Process{
 		ID:     "proc_1",

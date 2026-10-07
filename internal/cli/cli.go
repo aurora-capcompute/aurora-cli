@@ -1,6 +1,6 @@
 // Package cli implements the aurora terminal: a shell over an aurora-dist.
 // The distribution's event-sourced state is a tree (see fs.go), so the
-// commands are the shell's own — pwd/cd/ls/cat/tail/tree/stat/diff to read
+// commands are the shell's own — pwd/cd/ls/cat/tail/stat/diff to read
 // it, spawn/mkdir/kill/retry/approve/deny/resolve to act on it, mount to point
 // at a server. It keeps a working directory the way a shell does, persisted
 // in a small config file so a path chosen once need not be retyped. Reads
@@ -52,7 +52,6 @@ id prefixes resolve):
   less <path>...               page a file through $PAGER (else less); set
                                $AURORA_PAGER to override — for long ones
   tail [path] [-n N]           the last N entries of a directory (default 10)
-  tree [path]                  the processes of a session
   stat <path>                  detailed JSON for any node
   diff <revA> <revB>           where a process's two revisions diverge
 
@@ -118,8 +117,6 @@ func (a *app) dispatch(ctx context.Context, command string, rest []string) error
 		return a.less(ctx, rest)
 	case "tail":
 		return a.tail(ctx, rest)
-	case "tree":
-		return a.tree(ctx, rest)
 	case "stat":
 		return a.stat(ctx, rest)
 	case "diff":
@@ -483,75 +480,6 @@ func (a *app) tail(ctx context.Context, args []string) error {
 		a.printf("%s", line)
 	}
 	return nil
-}
-
-func (a *app) tree(ctx context.Context, args []string) error {
-	fs, server := a.flags("tree")
-	rest, err := a.bind(fs, server, args)
-	if err != nil {
-		return err
-	}
-	target := "."
-	if len(rest) > 0 {
-		target = rest[0]
-	}
-	n, err := a.resolveNode(ctx, target)
-	if err != nil {
-		return err
-	}
-	switch n.kind {
-	case nodeRoot:
-		summaries, err := a.client.ListSessions(ctx)
-		if err != nil {
-			return err
-		}
-		for _, summary := range summaries {
-			log, err := a.client.Session(ctx, summary.ID)
-			if err != nil {
-				return err
-			}
-			a.printf("%s  %s", log.Session.ID, quoteTitle(truncate(log.Session.Title, 48)))
-			a.printTree(log, processIDs(log), "")
-		}
-		return nil
-	case nodeSession:
-		a.printf("%s  %s", n.log.Session.ID, quoteTitle(truncate(n.log.Session.Title, 48)))
-		a.printTree(n.log, processIDs(n.log), "")
-		return nil
-	case nodeProcess:
-		a.printf("%s", processLine(n.process.Process))
-		return nil
-	default:
-		return notDir(n.path)
-	}
-}
-
-// processIDs lists a session's processes in order.
-func processIDs(log client.SessionLog) []string {
-	ids := make([]string, 0, len(log.Processes))
-	for _, proc := range log.Processes {
-		ids = append(ids, proc.ID)
-	}
-	return ids
-}
-
-// printTree renders a session's processes, one per line.
-func (a *app) printTree(log client.SessionLog, ids []string, prefix string) {
-	byID := make(map[string]client.ProcessLog, len(log.Processes))
-	for _, proc := range log.Processes {
-		byID[proc.ID] = proc
-	}
-	for i, id := range ids {
-		proc, ok := byID[id]
-		if !ok {
-			continue
-		}
-		connector := "├── "
-		if i == len(ids)-1 {
-			connector = "└── "
-		}
-		a.printf("%s%s%s", prefix, connector, processLine(proc.Process))
-	}
 }
 
 func (a *app) stat(ctx context.Context, args []string) error {

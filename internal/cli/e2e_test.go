@@ -300,11 +300,6 @@ func TestTerminalEndToEnd(t *testing.T) {
 		t.Fatalf("cat task = %q", got)
 	}
 
-	// tree renders a session's processes.
-	if got := aurora(t, "tree"); !strings.Contains(got, "completed") {
-		t.Fatalf("tree = %q", got)
-	}
-
 	// One revision is identical to the process's current view.
 	if got := aurora(t, "diff", processID+"/revisions/1", processID); !strings.Contains(got, "identical") {
 		t.Fatalf("diff = %q", got)
