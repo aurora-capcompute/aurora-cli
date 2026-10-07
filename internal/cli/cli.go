@@ -34,7 +34,7 @@ Run one command, or start an interactive session with the same commands:
 
 The distribution is a virtual filesystem:
 
-  /                     the tenant: sessions, plus programs/
+  /                     the server: sessions, plus programs/
   /programs/agent       loaded program artifacts
   /alpha                a session (its name; unnamed ones show as /ses_x)
   /ses_x/proc_y         a process: status input answer error manifest,
@@ -833,9 +833,9 @@ func (a *app) parkHint(ctx context.Context, process client.Process) string {
 	return ""
 }
 
-// mkdir opens a session — a directory under the tenant. An optional name is its
-// handle (unique per tenant); without one the generated id is printed as the
-// handle to use.
+// mkdir opens a session — a directory under the root. An optional name is its
+// handle (unique); without one the generated id is printed as the handle to
+// use.
 func (a *app) mkdir(ctx context.Context, args []string) error {
 	fs, server := a.flags("mkdir")
 	var tags tagFlags

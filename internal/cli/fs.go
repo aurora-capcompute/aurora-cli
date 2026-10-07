@@ -3,7 +3,7 @@ package cli
 // The distribution's virtual filesystem. Aurora's event-sourced state is a
 // tree, so the terminal browses it as one:
 //
-//	/                    the tenant: sessions, plus programs/
+//	/                    the server: sessions, plus programs/
 //	/programs/agent      loaded program artifacts
 //
 // resolveNode turns a path into a typed node, fetching what it needs from
