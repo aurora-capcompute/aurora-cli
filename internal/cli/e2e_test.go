@@ -291,7 +291,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	}
 
 	// The timer task is anchored to its journal position (a symlink in
-	// ls -l) and was resolved by the timer service.
+	// ls -l) and was resolved by the runtime's task sweep.
 	if got := aurora(t, "ls", "-l", processID+"/tasks"); !strings.Contains(got, "-> ../") || !strings.Contains(got, "sys.timer") {
 		t.Fatalf("ls -l tasks = %q", got)
 	}
