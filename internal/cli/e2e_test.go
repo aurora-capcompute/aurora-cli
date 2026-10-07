@@ -115,7 +115,10 @@ func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) 
 	_ = listener.Close()
 
 	cmd := exec.Command(bin, "-addr", addr, "-programs", programsDir, "-data", dataDir)
-	cmd.Env = append(os.Environ(), "AURORA_TASK_SECRET=cli-e2e-secret-value") // >=16 bytes
+	cmd.Env = append(os.Environ(),
+		"AURORA_TASK_SECRET=cli-e2e-secret-value", // >=16 bytes
+		"AURORA_SECRET_OPENAI_KEY=test",           // the manifest names it; the host holds it
+	)
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {
@@ -200,7 +203,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	  "syscalls": [
 	    {"syscall": "sys.timer"},
 	    {"syscall": "core.openaiApi", "hidden": true,
-	     "base_url": %q, "api_key": "test", "allow_insecure_http": true, "default_model": "stub",
+	     "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
 	     "capabilities": [{"operation": "chat", "require_approval": false}]}
 	  ]
 	}`, llm.URL+"/v1")
@@ -369,7 +372,7 @@ func TestTerminalApproveDeny(t *testing.T) {
 	  "program": "agent",
 	  "syscalls": [
 	    {"syscall": "core.openaiApi", "hidden": true,
-	     "base_url": %q, "api_key": "test", "allow_insecure_http": true, "default_model": "stub",
+	     "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
 	     "capabilities": [{"operation": "chat", "require_approval": true}]}
 	  ]
 	}`, llm.URL+"/v1")
