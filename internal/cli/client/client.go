@@ -77,7 +77,7 @@ type ProcessLog struct {
 // Parked reports whether the process is durably suspended awaiting
 // out-of-band resolution.
 func (p Process) Parked() bool {
-	return p.Status == "waiting_for_task" || p.Status == "yielded"
+	return p.Status == "waiting_for_task"
 }
 
 type Syscall struct {
