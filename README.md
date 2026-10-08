@@ -75,24 +75,8 @@ aurora ls -l revisions/1              # the journal, one line per syscall
 aurora approve tasks/task_z -reason "looks good"
 ```
 
-A minimal manifest:
-
-```json
-{
-  "version": 4,
-  "program": "agent",
-  "syscalls": [
-    {"syscall": "sys.timer"},
-    {"syscall": "core.openaiApi", "hidden": true,
-     "base_url": "https://api.openai.com/v1", "api_key": {"secret": "OPENAI_KEY"},
-     "default_model": "gpt-4o-mini",
-     "capabilities": [{"operation": "chat", "require_approval": false}]}
-  ]
-}
-```
-
-`api_key` is a reference. The server resolves it from `AURORA_SECRET_OPENAI_KEY`
-in its own environment.
+The [aurora-dist README](https://github.com/aurora-capcompute/aurora-dist) has
+a minimal manifest.
 
 - A manifest comes from `-manifest` (a file, or `-` for stdin), else
   `$AURORA_MANIFEST`. A spawn never inherits one.
