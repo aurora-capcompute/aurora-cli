@@ -66,7 +66,7 @@ lives on the server side; the CLI is a thin, pipeable client.
 Other niceties: **unique id prefixes resolve** (`cd proc` finds the one process),
 paths are relative to a **saved working directory**, output is **line‑oriented and
 pipeable** (`aurora ls / | jq …`), and an **interactive REPL** (`aurora -i`) gives
-you a live prompt with tab‑completion for commands, paths, and `@file` mentions.
+you a live prompt with tab‑completion for commands and paths.
 
 ## Quick start (5 minutes)
 
@@ -130,7 +130,6 @@ More real invocations:
 
 ```sh
 aurora -i                                 # interactive REPL
-aurora spawn "summarize @notes.txt"       # @notes.txt → $AURORA_WORKDIR/notes.txt
 aurora spawn "long job" -detach           # print the process id, don't follow
 aurora diff proc_x/revisions/1 proc_x/revisions/2
 aurora approve proc_y/tasks/task_z -reason "looks good"
@@ -142,8 +141,6 @@ aurora ls / | jq .                        # output is pipeable
 - **Manifests** (the syscall grant set) come from `-manifest` (a file, or `-` for
   stdin), else `$AURORA_MANIFEST`. They are **never inherited** between spawns —
   set `$AURORA_MANIFEST` once to state grants like an environment.
-- **`@file` mentions** in a spawn input resolve against `$AURORA_WORKDIR`, so an
-  agent granted a filesystem capability rooted there can open what you name.
 - **Approvals** authenticate with the task's bearer token, which the CLI fetches
   from the API for you — so `approve <task-id>` is enough.
 
@@ -153,7 +150,6 @@ aurora ls / | jq .                        # output is pipeable
 | --- | --- |
 | `AURORA_DIST` | Fallback server URL (default is `http://127.0.0.1:8080`) |
 | `AURORA_MANIFEST` | Default manifest file for `spawn` |
-| `AURORA_WORKDIR` | Base dir that `@file` mentions resolve against |
 | `AURORA_CONFIG` / `XDG_CONFIG_HOME` | Where the saved context (server + cwd) is stored |
 | `AURORA_PAGER` / `PAGER` | Pager for `less` |
 
@@ -168,7 +164,6 @@ cmd/aurora/main.go       the binary (builds to "aurora")
 internal/cli/
   cli.go                 command dispatch, handlers, the spawn/poll loop, rendering
   fs.go                  the virtual filesystem: node kinds + path resolution
-  mentions.go            @-file mention resolution + completion
   interactive.go         the REPL (prompt, history, tab-completion)
   config/                persists the mounted server + working directory
   client/                the aurora-dist /v1 HTTP client (self-defined wire types)
