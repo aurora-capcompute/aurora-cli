@@ -15,9 +15,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -77,20 +78,10 @@ func notDir(p string) error { return fmt.Errorf("%s: not a directory", p) }
 // it: absolute paths stand alone, relative ones resolve against cwd, "." and
 // ".." collapse.
 func canonicalize(cwd, arg string) string {
-	if arg == "" {
-		arg = "."
-	}
 	if !strings.HasPrefix(arg, "/") {
-		if cwd == "" {
-			cwd = "/"
-		}
-		arg = cwd + "/" + arg
+		arg = "/" + cwd + "/" + arg
 	}
-	cleaned := path.Clean(arg)
-	if cleaned == "" || cleaned == "." {
-		return "/"
-	}
-	return cleaned
+	return path.Clean(arg)
 }
 
 func pathSegments(p string) []string {
@@ -101,25 +92,28 @@ func pathSegments(p string) []string {
 	return strings.Split(trimmed, "/")
 }
 
-// matchID resolves a segment against a set of ids: an exact match wins, else
-// a unique prefix.
-func matchID(ids []string, want, p string) (string, error) {
+// match resolves the path segment want against items by their ids: an exact
+// match wins, else a unique prefix. p is the whole path, for errors.
+func match[T any](items []T, id func(T) string, want, p string) (T, error) {
+	var zero T
 	var matches []string
-	for _, id := range ids {
-		if id == want {
-			return id, nil
+	var found T
+	for _, item := range items {
+		if id(item) == want {
+			return item, nil
 		}
-		if strings.HasPrefix(id, want) {
-			matches = append(matches, id)
+		if strings.HasPrefix(id(item), want) {
+			matches = append(matches, id(item))
+			found = item
 		}
 	}
 	switch len(matches) {
 	case 1:
-		return matches[0], nil
+		return found, nil
 	case 0:
-		return "", noEnt(p)
+		return zero, noEnt(p)
 	default:
-		return "", fmt.Errorf("%s: ambiguous — matches %s", p, strings.Join(matches, ", "))
+		return zero, fmt.Errorf("%s: ambiguous — matches %s", p, strings.Join(matches, ", "))
 	}
 }
 
@@ -149,7 +143,7 @@ func (a *app) resolveNode(ctx context.Context, arg string) (node, error) {
 		return n, nil
 	}
 
-	proc, err := matchProcess(log, segs[1], p)
+	proc, err := match(log.Processes, func(proc client.ProcessLog) string { return proc.ID }, segs[1], p)
 	if err != nil {
 		return node{}, err
 	}
@@ -190,7 +184,7 @@ func (a *app) resolveInProcess(n node, p string, segs []string) (node, error) {
 		if len(segs) == 1 {
 			return n, nil
 		}
-		task, err := matchTask(n.process, segs[1], p)
+		task, err := match(n.process.Tasks, func(task client.Task) string { return task.ID }, segs[1], p)
 		if err != nil {
 			return node{}, err
 		}
@@ -234,20 +228,11 @@ func (a *app) resolveProgram(ctx context.Context, p string, segs []string) (node
 	if err != nil {
 		return node{}, err
 	}
-	ids := make([]string, 0, len(programs))
-	for _, program := range programs {
-		ids = append(ids, program.ID)
-	}
-	id, err := matchID(ids, segs[1], p)
+	program, err := match(programs, func(program client.Program) string { return program.ID }, segs[1], p)
 	if err != nil {
 		return node{}, err
 	}
-	for _, program := range programs {
-		if program.ID == id {
-			return node{kind: nodeProgram, path: "/programs/" + id, program: program}, nil
-		}
-	}
-	return node{}, noEnt(p)
+	return node{kind: nodeProgram, path: "/programs/" + program.ID, program: program}, nil
 }
 
 // session resolves a session segment: an exact id fetches directly; else an
@@ -265,15 +250,11 @@ func (a *app) session(ctx context.Context, seg, p string) (client.SessionLog, er
 			return a.client.Session(ctx, summary.ID)
 		}
 	}
-	ids := make([]string, 0, len(summaries))
-	for _, summary := range summaries {
-		ids = append(ids, summary.ID)
-	}
-	id, err := matchID(ids, seg, p)
+	summary, err := match(summaries, func(summary client.SessionSummary) string { return summary.ID }, seg, p)
 	if err != nil {
 		return client.SessionLog{}, err
 	}
-	return a.client.Session(ctx, id)
+	return a.client.Session(ctx, summary.ID)
 }
 
 // sessionHandle is a session's display name: its explicit name, or its id when
@@ -283,40 +264,6 @@ func sessionHandle(summary client.SessionSummary) string {
 		return summary.Name
 	}
 	return summary.ID
-}
-
-func matchProcess(log client.SessionLog, seg, p string) (client.ProcessLog, error) {
-	ids := make([]string, 0, len(log.Processes))
-	for _, proc := range log.Processes {
-		ids = append(ids, proc.ID)
-	}
-	id, err := matchID(ids, seg, p)
-	if err != nil {
-		return client.ProcessLog{}, err
-	}
-	for _, proc := range log.Processes {
-		if proc.ID == id {
-			return proc, nil
-		}
-	}
-	return client.ProcessLog{}, noEnt(p)
-}
-
-func matchTask(proc client.ProcessLog, seg, p string) (client.Task, error) {
-	ids := make([]string, 0, len(proc.Tasks))
-	for _, task := range proc.Tasks {
-		ids = append(ids, task.ID)
-	}
-	id, err := matchID(ids, seg, p)
-	if err != nil {
-		return client.Task{}, err
-	}
-	for _, task := range proc.Tasks {
-		if task.ID == id {
-			return task, nil
-		}
-	}
-	return client.Task{}, noEnt(p)
 }
 
 // --- listing ---
@@ -337,7 +284,8 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.Before(summaries[j].CreatedAt) })
+		// The server lists sessions in no order.
+		slices.SortFunc(summaries, func(a, b client.SessionSummary) int { return a.CreatedAt.Compare(b.CreatedAt) })
 		entries := []lsEntry{
 			{name: "programs/", long: "programs/  loaded program artifacts"},
 		}
@@ -356,11 +304,11 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		}
 		return entries, nil
 	case nodePrograms:
+		// The server lists programs by id.
 		programs, err := a.client.Programs(ctx)
 		if err != nil {
 			return nil, err
 		}
-		sort.Slice(programs, func(i, j int) bool { return programs[i].ID < programs[j].ID })
 		entries := make([]lsEntry, 0, len(programs))
 		for _, program := range programs {
 			entries = append(entries, lsEntry{
@@ -406,10 +354,9 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		}
 		return entries, nil
 	case nodeTasks:
-		tasks := append([]client.Task(nil), n.process.Tasks...)
-		sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.Before(tasks[j].CreatedAt) })
-		entries := make([]lsEntry, 0, len(tasks))
-		for _, task := range tasks {
+		// The server lists a process's tasks oldest first.
+		entries := make([]lsEntry, 0, len(n.process.Tasks))
+		for _, task := range n.process.Tasks {
 			entries = append(entries, lsEntry{name: task.ID, long: taskLine(task)})
 		}
 		return entries, nil
@@ -448,8 +395,7 @@ func taskLine(task client.Task) string {
 // --- file contents ---
 
 // catLines renders a file node's content as lines: the conversation for
-// history, the bare value for a process's leaf files, pretty JSON for
-// entries,
+// history, the bare value for a process's leaf files, pretty JSON for entries,
 // tasks, and programs.
 func catLines(n node) ([]string, error) {
 	switch n.kind {
@@ -535,7 +481,7 @@ func fileLong(n node) string {
 }
 
 func jsonLines(value any) ([]string, error) {
-	raw, err := marshalIndent(value)
+	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return nil, err
 	}

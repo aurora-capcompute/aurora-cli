@@ -145,45 +145,45 @@ func New(baseURL string) *Client {
 	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: http.DefaultClient}
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+// call sends one request and decodes the response into a T. A failure status
+// comes back as an *APIError when the body carries the API's error shape.
+func call[T any](ctx context.Context, c *Client, method, path string, body any) (T, error) {
+	var out T
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return out, err
 		}
 		reader = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
 	if err != nil {
-		return err
+		return out, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return out, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return out, err
 	}
 	if resp.StatusCode >= 300 {
-		var body struct {
+		var failure struct {
 			Error string `json:"error"`
 			Code  string `json:"code"`
 		}
-		if json.Unmarshal(raw, &body) == nil && body.Error != "" {
-			return &APIError{Status: resp.StatusCode, Code: body.Code, Message: body.Error}
+		if json.Unmarshal(raw, &failure) == nil && failure.Error != "" {
+			return out, &APIError{Status: resp.StatusCode, Code: failure.Code, Message: failure.Error}
 		}
-		return fmt.Errorf("%s %s: %s (%s)", method, path, resp.Status, strings.TrimSpace(string(raw)))
+		return out, fmt.Errorf("%s %s: %s (%s)", method, path, resp.Status, strings.TrimSpace(string(raw)))
 	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+	return out, json.Unmarshal(raw, &out)
 }
 
 // APIError is a structured {error, code} failure from the /v1 API. Callers can
@@ -197,37 +197,26 @@ type APIError struct {
 func (e *APIError) Error() string { return e.Message }
 
 func (c *Client) ListSessions(ctx context.Context) ([]SessionSummary, error) {
-	var out []SessionSummary
-	err := c.do(ctx, http.MethodGet, "/v1/sessions", nil, &out)
-	return out, err
+	return call[[]SessionSummary](ctx, c, http.MethodGet, "/v1/sessions", nil)
 }
 
-// Programs lists the loaded program artifacts (read-only; the set is
-// reconciled from the server's programs directory).
+// Programs lists the program artifacts the server loaded at boot.
 func (c *Client) Programs(ctx context.Context) ([]Program, error) {
-	var out []Program
-	err := c.do(ctx, http.MethodGet, "/v1/programs", nil, &out)
-	return out, err
+	return call[[]Program](ctx, c, http.MethodGet, "/v1/programs", nil)
 }
 
 func (c *Client) CreateSession(ctx context.Context, name string, tags map[string]string) (SessionLog, error) {
-	var out SessionLog
-	err := c.do(ctx, http.MethodPost, "/v1/sessions", map[string]any{"name": name, "tags": tags}, &out)
-	return out, err
+	return call[SessionLog](ctx, c, http.MethodPost, "/v1/sessions", map[string]any{"name": name, "tags": tags})
 }
 
 // RenameSession changes a session's explicit handle.
 func (c *Client) RenameSession(ctx context.Context, id, name string) (SessionLog, error) {
-	var out SessionLog
-	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(id)+"/rename", map[string]any{"name": name}, &out)
-	return out, err
+	return call[SessionLog](ctx, c, http.MethodPost, "/v1/sessions/"+url.PathEscape(id)+"/rename", map[string]any{"name": name})
 }
 
 // Session returns the complete session log — the one comprehensive read.
 func (c *Client) Session(ctx context.Context, id string) (SessionLog, error) {
-	var out SessionLog
-	err := c.do(ctx, http.MethodGet, "/v1/sessions/"+url.PathEscape(id), nil, &out)
-	return out, err
+	return call[SessionLog](ctx, c, http.MethodGet, "/v1/sessions/"+url.PathEscape(id), nil)
 }
 
 func (c *Client) CreateProcess(ctx context.Context, sessionID, input string, manifest json.RawMessage) (Process, error) {
@@ -235,35 +224,25 @@ func (c *Client) CreateProcess(ctx context.Context, sessionID, input string, man
 	if len(manifest) > 0 {
 		body["manifest"] = manifest
 	}
-	var out Process
-	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/processes", body, &out)
-	return out, err
+	return call[Process](ctx, c, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/processes", body)
 }
 
 // GetProcess is the cheap single-process status poll.
 func (c *Client) GetProcess(ctx context.Context, id string) (Process, error) {
-	var out Process
-	err := c.do(ctx, http.MethodGet, "/v1/processes/"+url.PathEscape(id), nil, &out)
-	return out, err
+	return call[Process](ctx, c, http.MethodGet, "/v1/processes/"+url.PathEscape(id), nil)
 }
 
 func (c *Client) ResolveTask(ctx context.Context, taskID, token string, resolution Resolution) (Task, error) {
-	var out Task
-	err := c.do(ctx, http.MethodPost, "/v1/tasks/"+url.PathEscape(taskID)+"/resolve", map[string]any{
+	return call[Task](ctx, c, http.MethodPost, "/v1/tasks/"+url.PathEscape(taskID)+"/resolve", map[string]any{
 		"resolution_token": token,
 		"resolution":       resolution,
-	}, &out)
-	return out, err
+	})
 }
 
 func (c *Client) Stop(ctx context.Context, processID string) (Process, error) {
-	var out Process
-	err := c.do(ctx, http.MethodPost, "/v1/processes/"+url.PathEscape(processID)+"/stop", map[string]any{}, &out)
-	return out, err
+	return call[Process](ctx, c, http.MethodPost, "/v1/processes/"+url.PathEscape(processID)+"/stop", map[string]any{})
 }
 
 func (c *Client) Retry(ctx context.Context, processID, mode string) (Process, error) {
-	var out Process
-	err := c.do(ctx, http.MethodPost, "/v1/processes/"+url.PathEscape(processID)+"/retry", map[string]any{"mode": mode}, &out)
-	return out, err
+	return call[Process](ctx, c, http.MethodPost, "/v1/processes/"+url.PathEscape(processID)+"/retry", map[string]any{"mode": mode})
 }

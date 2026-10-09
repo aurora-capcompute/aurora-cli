@@ -10,15 +10,17 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -128,9 +130,9 @@ func (a *app) dispatch(ctx context.Context, command string, rest []string) error
 	case "retry":
 		return a.retry(ctx, rest)
 	case "approve":
-		return a.resolveShorthand(ctx, rest, "approved")
+		return a.resolveShorthand(ctx, rest, "approve", "approved")
 	case "deny":
-		return a.resolveShorthand(ctx, rest, "denied")
+		return a.resolveShorthand(ctx, rest, "deny", "denied")
 	case "resolve":
 		return a.resolve(ctx, rest)
 	case "mount":
@@ -185,17 +187,7 @@ func (a *app) bind(fs *flag.FlagSet, server *string, args []string) ([]string, e
 // connect resolves the server — the flag override, else the mounted context,
 // else $AURORA_DIST, else the local default — and attaches the API client.
 func (a *app) connect(override string) {
-	base := override
-	if base == "" {
-		base = a.ctx.Server
-	}
-	if base == "" {
-		base = os.Getenv("AURORA_DIST")
-	}
-	if base == "" {
-		base = "http://127.0.0.1:8080"
-	}
-	a.client = client.New(base)
+	a.client = client.New(cmp.Or(override, a.ctx.Server, os.Getenv("AURORA_DIST"), "http://127.0.0.1:8080"))
 }
 
 func (a *app) cwd() string {
@@ -223,12 +215,8 @@ func (a *app) cwdProcess() (string, error) {
 	return segs[1], nil
 }
 
-func marshalIndent(value any) ([]byte, error) {
-	return json.MarshalIndent(value, "", "  ")
-}
-
 func (a *app) emitJSON(value any) error {
-	raw, err := marshalIndent(value)
+	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -246,12 +234,11 @@ func (a *app) whereami(context.Context) error {
 
 // --- navigation ---
 
-func (a *app) pwd(ctx context.Context, args []string) error {
+func (a *app) pwd(_ context.Context, args []string) error {
 	fs, server := a.flags("pwd")
 	if _, err := a.bind(fs, server, args); err != nil {
 		return err
 	}
-	_ = ctx
 	a.printf("%s", a.cwd())
 	return nil
 }
@@ -284,13 +271,12 @@ func (a *app) cd(ctx context.Context, args []string) error {
 	return config.Save(a.ctx)
 }
 
-func (a *app) mount(ctx context.Context, args []string) error {
+func (a *app) mount(_ context.Context, args []string) error {
 	fs, server := a.flags("mount")
 	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
-	_ = ctx
 	if len(rest) == 0 {
 		a.printf("%s on / type aurora-dist", a.client.BaseURL)
 		return nil
@@ -342,20 +328,31 @@ func (a *app) cat(ctx context.Context, args []string) error {
 	if len(rest) == 0 {
 		return errors.New("usage: cat <path>...")
 	}
-	for _, target := range rest {
-		n, err := a.resolveNode(ctx, target)
-		if err != nil {
-			return err
-		}
-		lines, err := catLines(n)
-		if err != nil {
-			return err
-		}
-		for _, line := range lines {
-			a.printf("%s", line)
-		}
+	lines, err := a.catAll(ctx, rest)
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		a.printf("%s", line)
 	}
 	return nil
+}
+
+// catAll is the content of every target, in order.
+func (a *app) catAll(ctx context.Context, targets []string) ([]string, error) {
+	var lines []string
+	for _, target := range targets {
+		n, err := a.resolveNode(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		content, err := catLines(n)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, content...)
+	}
+	return lines, nil
 }
 
 // less shows a node's content through a pager instead of dumping it: same
@@ -370,17 +367,9 @@ func (a *app) less(ctx context.Context, args []string) error {
 	if len(rest) == 0 {
 		return errors.New("usage: less <path>...")
 	}
-	var lines []string
-	for _, target := range rest {
-		n, err := a.resolveNode(ctx, target)
-		if err != nil {
-			return err
-		}
-		l, err := catLines(n)
-		if err != nil {
-			return err
-		}
-		lines = append(lines, l...)
+	lines, err := a.catAll(ctx, rest)
+	if err != nil {
+		return err
 	}
 	return a.page(lines)
 }
@@ -419,13 +408,7 @@ func (a *app) page(lines []string) error {
 
 // pagerCommand resolves the pager: $AURORA_PAGER, else $PAGER, else `less`.
 func pagerCommand() string {
-	if p := strings.TrimSpace(os.Getenv("AURORA_PAGER")); p != "" {
-		return p
-	}
-	if p := strings.TrimSpace(os.Getenv("PAGER")); p != "" {
-		return p
-	}
-	return "less"
+	return cmp.Or(strings.TrimSpace(os.Getenv("AURORA_PAGER")), strings.TrimSpace(os.Getenv("PAGER")), "less")
 }
 
 // isTerminal reports whether f is a character device — a real terminal — as
@@ -876,10 +859,8 @@ func (a *app) mv(ctx context.Context, args []string) error {
 		return fmt.Errorf("mv: only a session can be renamed (%s is not a session)", n.path)
 	}
 	name := strings.TrimSpace(strings.Join(rest[1:], " "))
-	if _, err := a.client.RenameSession(ctx, n.log.Session.ID, name); err != nil {
-		return err
-	}
-	return nil
+	_, err = a.client.RenameSession(ctx, n.log.Session.ID, name)
+	return err
 }
 
 // targetProcess resolves a verb's process: an explicit path (or bare id),
@@ -982,15 +963,17 @@ func (a *app) taskInSession(ctx context.Context, sessionID, taskID string) (clie
 	return client.Task{}, false
 }
 
-func (a *app) resolveShorthand(ctx context.Context, args []string, decision string) error {
-	fs, server := a.flags(decision)
+// resolveShorthand is approve and deny: command is the verb, decision the
+// resolution it sends.
+func (a *app) resolveShorthand(ctx context.Context, args []string, command, decision string) error {
+	fs, server := a.flags(command)
 	reason := fs.String("reason", "", "resolution reason")
 	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
-	if len(rest) < 1 {
-		return fmt.Errorf("usage: %s <task> [-reason text]", map[string]string{"approved": "approve", "denied": "deny"}[decision])
+	if len(rest) == 0 {
+		return fmt.Errorf("usage: %s <task> [-reason text]", command)
 	}
 	task, err := a.targetTask(ctx, rest[0])
 	if err != nil {
@@ -1019,7 +1002,7 @@ func (a *app) resolve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(rest) < 1 {
+	if len(rest) == 0 {
 		return errors.New("usage: resolve <task> -decision d [-data json] [-reason text] [-token t]")
 	}
 	if *decision == "" {
@@ -1094,40 +1077,35 @@ func revisionEntries(process client.ProcessLog, revision uint64) []client.Journa
 		}
 	}
 	best := map[int]client.JournalEntry{}
-	positions := make([]int, 0, len(process.Entries))
 	for _, entry := range process.Entries {
 		if entry.Revision > revision || entry.Position >= end {
 			continue
 		}
 		if current, ok := best[entry.Position]; !ok || entry.Revision > current.Revision {
-			if !ok {
-				positions = append(positions, entry.Position)
-			}
 			best[entry.Position] = entry
 		}
 	}
-	sort.Ints(positions)
-	out := make([]client.JournalEntry, 0, len(positions))
-	for _, position := range positions {
+	out := make([]client.JournalEntry, 0, len(best))
+	for _, position := range slices.Sorted(maps.Keys(best)) {
 		out = append(out, best[position])
 	}
 	return out
 }
 
-// compact renders raw JSON on one line, truncated to limit runes (0 = no
-// truncation). The output is terminal-sanitized: journal args/results are
-// guest-authored, and a lifecycle syscall published with no InputSchema (e.g.
-// sys.output) journals its args unvalidated — so a guest can land raw,
-// non-JSON bytes as an intent. json.Compact then fails and the fallback writes
-// those bytes verbatim; sanitizeTerminal neutralizes any escape sequences
-// before they reach the operator's terminal. On valid JSON the control
-// characters are already \u-escaped, so this is a no-op.
 // pendingCall is the call a task holds, as a human deciding on it should see
 // it: the syscall and its complete arguments, never a summary.
 func pendingCall(task client.Task) string {
 	return strings.TrimSpace(task.Syscall.Name + " " + compact(task.Syscall.Args, 0))
 }
 
+// compact renders raw JSON on one line, truncated to limit runes (0 = no
+// truncation). The output is terminal-sanitized: journal args and results are
+// guest-authored, and a lifecycle syscall published with no InputSchema (e.g.
+// sys.output) journals its args unvalidated — so a guest can land raw,
+// non-JSON bytes as an intent. json.Compact then fails and the fallback writes
+// those bytes verbatim. sanitizeTerminal neutralizes any escape sequences
+// before they reach the operator's terminal. On valid JSON the control
+// characters are already \u-escaped, so this changes nothing.
 func compact(raw json.RawMessage, limit int) string {
 	if len(raw) == 0 {
 		return ""

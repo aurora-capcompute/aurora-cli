@@ -195,9 +195,6 @@ func (a *app) completePath(word string) ([][]rune, int) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if a.client == nil {
-		a.connect("")
-	}
 	n, err := a.resolveNode(ctx, target)
 	if err != nil {
 		return nil, len(prefix)
@@ -206,11 +203,9 @@ func (a *app) completePath(word string) ([][]rune, int) {
 	if err != nil {
 		return nil, len(prefix)
 	}
-	var out [][]rune
+	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.name, prefix) {
-			out = append(out, []rune(entry.name[len(prefix):]))
-		}
+		names = append(names, entry.name)
 	}
-	return out, len(prefix)
+	return completeFrom(names, prefix)
 }
