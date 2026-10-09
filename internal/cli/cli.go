@@ -58,8 +58,8 @@ id prefixes resolve):
 Act (history is append-only: there is no rm — these are the only writes):
   spawn <input> [-manifest f|-] [-detach]
                                run a process in the current session and follow
-                               it to its answer. Manifest: -manifest, else
-                               $AURORA_MANIFEST, else none — never inherited.
+                               it to its answer. The manifest is required:
+                               -manifest, else $AURORA_MANIFEST — never inherited.
   mkdir [name] [-tag k=v ...]  create a session (a directory); prints its handle
                                — the name, or a generated id if unnamed
   mv <session> <new-name>      rename a session
@@ -516,7 +516,7 @@ func (a *app) stat(ctx context.Context, args []string) error {
 			Entries int `json:"entries"`
 			Tasks   int `json:"tasks"`
 		}{n.process.Process,
-			len(effectiveEntries(n.process.Entries, n.process.Revision)), len(n.process.Tasks)})
+			len(revisionEntries(n.process, n.process.Revision)), len(n.process.Tasks)})
 	case nodeProcessFile:
 		lines, err := catLines(n)
 		if err != nil {
@@ -530,7 +530,7 @@ func (a *app) stat(ctx context.Context, args []string) error {
 	case nodeRevision:
 		return a.emitJSON(map[string]any{
 			"revision": n.revision,
-			"entries":  len(effectiveEntries(n.process.Entries, n.revision)),
+			"entries":  len(revisionEntries(n.process, n.revision)),
 		})
 	case nodeTasks:
 		return a.emitJSON(map[string]any{"tasks": len(n.process.Tasks)})
@@ -562,8 +562,8 @@ func (a *app) diff(ctx context.Context, args []string) error {
 	if left.process.ID != right.process.ID {
 		return errors.New("diff compares two revisions of one process")
 	}
-	before := effectiveEntries(left.process.Entries, left.revision)
-	after := effectiveEntries(right.process.Entries, right.revision)
+	before := revisionEntries(left.process, left.revision)
+	after := revisionEntries(right.process, right.revision)
 	shared := 0
 	for shared < len(before) && shared < len(after) &&
 		before[shared].Position == after[shared].Position &&
@@ -619,7 +619,8 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 	input := strings.Join(rest, " ")
 
 	// The manifest is an explicit input, never inherited from the session: the
-	// -manifest flag, else $AURORA_MANIFEST, else none (a no-tools run).
+	// -manifest flag, else $AURORA_MANIFEST. The server refuses a process
+	// without one, because the manifest names the program.
 	manifest, err := readManifest(*manifestPath)
 	if err != nil {
 		return err
@@ -640,8 +641,8 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 }
 
 // readManifest loads the manifest: the -manifest argument (a file path, or - for
-// stdin), else $AURORA_MANIFEST (a file path). Empty everywhere means no
-// manifest — a process with no granted tools. The manifest is never inherited
+// stdin), else $AURORA_MANIFEST (a file path). Empty everywhere sends no
+// manifest, and the server refuses the process. The manifest is never inherited
 // from the session; it is an explicit input the caller sets, like an env var.
 func readManifest(path string) (json.RawMessage, error) {
 	if path == "" {
@@ -720,7 +721,7 @@ func (a *app) followProgress(ctx context.Context, sessionID, processID string, s
 		if p.ID != processID {
 			continue
 		}
-		entries := effectiveEntries(p.Entries, p.Revision)
+		entries := revisionEntries(p, p.Revision)
 		for _, entry := range entries[min(shown, len(entries)):] {
 			if line := progressLine(entry); line != "" {
 				a.printf("%s", line)
@@ -1067,14 +1068,26 @@ func renderEntry(entry client.JournalEntry, limit int) string {
 	return line
 }
 
-// effectiveEntries is the journal a revision replays: for each position, the
-// entry with the highest revision ≤ maxRevision (copy-on-write forks leave
-// earlier-revision entries in the shared prefix).
-func effectiveEntries(entries []client.JournalEntry, maxRevision uint64) []client.JournalEntry {
+// revisionEntries is the journal one revision of a process replays: for each
+// position, the entry with the highest revision ≤ revision (copy-on-write forks
+// leave earlier-revision entries in the shared prefix), up to the revision's
+// end. An earlier revision may have run past that end. The current revision
+// ends at the process's journal length. An older revision ends at the last entry
+// it wrote itself, so one that wrote nothing shows no entries.
+func revisionEntries(process client.ProcessLog, revision uint64) []client.JournalEntry {
+	end := process.JournalLength
+	if revision != process.Revision {
+		end = 0
+		for _, entry := range process.Entries {
+			if entry.Revision == revision {
+				end = max(end, entry.Position+1)
+			}
+		}
+	}
 	best := map[int]client.JournalEntry{}
-	positions := make([]int, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Revision > maxRevision {
+	positions := make([]int, 0, len(process.Entries))
+	for _, entry := range process.Entries {
+		if entry.Revision > revision || entry.Position >= end {
 			continue
 		}
 		if current, ok := best[entry.Position]; !ok || entry.Revision > current.Revision {

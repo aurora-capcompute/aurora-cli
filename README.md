@@ -78,8 +78,9 @@ aurora approve tasks/task_z -reason "looks good"
 The [aurora-dist README](https://github.com/aurora-capcompute/aurora-dist) has
 a minimal manifest.
 
-- A manifest comes from `-manifest` (a file, or `-` for stdin), else
-  `$AURORA_MANIFEST`. A spawn never inherits one.
+- Each spawn needs a manifest, because the manifest names the program. It
+  comes from `-manifest` (a file, or `-` for stdin), else `$AURORA_MANIFEST`.
+  A spawn never inherits one.
 - `approve` and `deny` fetch the task's token from the API, so the task id is
   enough.
 

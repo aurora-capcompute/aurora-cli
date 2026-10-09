@@ -214,7 +214,7 @@ func entryNode(n node, p, seg string, rest []string) (node, error) {
 	if err != nil {
 		return node{}, noEnt(p)
 	}
-	for _, entry := range effectiveEntries(n.process.Entries, n.revision) {
+	for _, entry := range revisionEntries(n.process, n.revision) {
 		if entry.Position == position {
 			n.kind, n.entry, n.path = nodeEntry, entry, n.path+"/"+seg
 			return n, nil
@@ -392,7 +392,7 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 	case nodeRevisions:
 		entries := make([]lsEntry, 0, n.process.Revision)
 		for revision := uint64(1); revision <= n.process.Revision; revision++ {
-			count := len(effectiveEntries(n.process.Entries, revision))
+			count := len(revisionEntries(n.process, revision))
 			entries = append(entries, lsEntry{
 				name: fmt.Sprintf("%d/", revision),
 				long: fmt.Sprintf("%d/  %d entries", revision, count),
@@ -401,7 +401,7 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 		return entries, nil
 	case nodeRevision:
 		var entries []lsEntry
-		for _, entry := range effectiveEntries(n.process.Entries, n.revision) {
+		for _, entry := range revisionEntries(n.process, n.revision) {
 			entries = append(entries, lsEntry{name: strconv.Itoa(entry.Position), long: renderEntry(entry, 96)})
 		}
 		return entries, nil
