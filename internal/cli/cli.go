@@ -736,7 +736,7 @@ func (a *app) followProgress(ctx context.Context, sessionID, processID string, s
 // syscall and a short hint — or "" for the runtime's own plumbing, which is
 // noise during a follow.
 func progressLine(entry client.JournalEntry) string {
-	if isProgressNoise(entry.Syscall.Name) {
+	if isProgressNoise(entry.Syscall.Name) || isAutoSave(entry.Syscall) {
 		return ""
 	}
 	line := "  · " + entry.Syscall.Name
@@ -762,6 +762,15 @@ func isProgressNoise(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isAutoSave reports whether a call is the agent's automatic save of a tool
+// result (core.scratch store), which is housekeeping, not a step of the work.
+func isAutoSave(call client.Syscall) bool {
+	var args struct {
+		Operation string `json:"operation"`
+	}
+	return call.Name == "core.scratch" && json.Unmarshal(call.Args, &args) == nil && args.Operation == "store"
 }
 
 // syscallHint pulls a short, human-meaningful detail from a syscall's args (the
