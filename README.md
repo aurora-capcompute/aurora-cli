@@ -102,8 +102,13 @@ trusted, local use.
 ```
 cmd/aurora/main.go   the binary
 internal/cli/
-  cli.go             commands, the spawn and follow loop, rendering
+  cli.go             dispatch, flags, the working directory
   fs.go              the tree: node kinds and path resolution
+  navigate.go        pwd, cd, mount
+  read.go            ls, cat, less, tail, stat, diff
+  spawn.go           spawn and the live follow
+  act.go             mkdir, mv, kill, retry, approve, deny, resolve
+  render.go          one-line renderings, escape-safe output
   interactive.go     the prompt, history and completion
   config/            the saved server and working directory
   client/            the /v1 client, with its own wire types
