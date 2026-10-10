@@ -30,7 +30,7 @@ Act (the only writes):
 
 | Command | Effect |
 | --- | --- |
-| `spawn <input> [-manifest f\|-] [-detach]` | Start a process in the current session and follow it to its answer |
+| `spawn <input> [-detach]` | Start a process in the current session and follow it to its answer |
 | `mkdir [name] [-tag k=v ...]` | Create a session |
 | `mv <session> <new-name>` | Rename a session |
 | `kill [process]` | Stop a process |
@@ -65,7 +65,6 @@ go build ./cmd/aurora                 # or: go install ./cmd/aurora
 
 aurora mount http://127.0.0.1:8080    # remembered
 aurora mkdir demo && aurora cd demo
-export AURORA_MANIFEST=manifest.json  # the grants for each spawn
 aurora spawn "take a nap, then report back"
 
 aurora ls -l                          # the session's processes
@@ -75,12 +74,8 @@ aurora ls -l revisions/1              # the journal, one line per syscall
 aurora approve tasks/task_z -reason "looks good"
 ```
 
-The [aurora-dist README](https://github.com/aurora-capcompute/aurora-dist) has
-a minimal manifest.
-
-- Each spawn needs a manifest, because the manifest names the program. It
-  comes from `-manifest` (a file, or `-` for stdin), else `$AURORA_MANIFEST`.
-  A spawn never inherits one.
+- A spawn sends only the input. The server's skills set what the process may
+  do (see the [aurora-dist README](https://github.com/aurora-capcompute/aurora-dist)).
 - `approve` and `deny` fetch the task's token from the API, so the task id is
   enough.
 
@@ -89,7 +84,6 @@ a minimal manifest.
 | Variable | Purpose |
 | --- | --- |
 | `AURORA_DIST` | Server URL when nothing else sets one |
-| `AURORA_MANIFEST` | Default manifest for `spawn` |
 | `AURORA_CONFIG`, `XDG_CONFIG_HOME` | Where the saved server and working directory live |
 | `AURORA_PAGER`, `PAGER` | Pager for `less` (default `less`) |
 

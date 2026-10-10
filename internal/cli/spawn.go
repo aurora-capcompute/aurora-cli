@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -18,29 +16,21 @@ import (
 
 func (a *app) spawn(ctx context.Context, args []string) error {
 	fs, server := a.flags("spawn")
-	manifestPath := fs.String("manifest", "", "path to a manifest JSON file (- reads stdin); defaults to $AURORA_MANIFEST")
 	detach := fs.Bool("detach", false, "print the process id and exit instead of following")
 	rest, err := a.bind(fs, server, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: spawn <input> [-manifest file.json|-] [-detach]")
+		return errors.New("usage: spawn <input> [-detach]")
 	}
 	input := strings.Join(rest, " ")
 
-	// The manifest is an explicit input, never inherited from the session: the
-	// -manifest flag, else $AURORA_MANIFEST. The server refuses a process
-	// without one, because the manifest names the program.
-	manifest, err := readManifest(*manifestPath)
-	if err != nil {
-		return err
-	}
 	sessionID, err := a.cwdSession()
 	if err != nil {
 		return err
 	}
-	process, err := a.client.CreateProcess(ctx, sessionID, input, manifest)
+	process, err := a.client.CreateProcess(ctx, sessionID, input)
 	if err != nil {
 		return err
 	}
@@ -49,32 +39,6 @@ func (a *app) spawn(ctx context.Context, args []string) error {
 		return nil
 	}
 	return a.pollToAnswer(ctx, process.ID)
-}
-
-// readManifest loads the manifest: the -manifest argument (a file path, or - for
-// stdin), else $AURORA_MANIFEST (a file path). Empty everywhere sends no
-// manifest, and the server refuses the process. The manifest is never inherited
-// from the session; it is an explicit input the caller sets, like an env var.
-func readManifest(path string) (json.RawMessage, error) {
-	if path == "" {
-		path = strings.TrimSpace(os.Getenv("AURORA_MANIFEST"))
-	}
-	switch path {
-	case "":
-		return nil, nil
-	case "-":
-		raw, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return nil, fmt.Errorf("read manifest from stdin: %w", err)
-		}
-		return raw, nil
-	default:
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read manifest: %w", err)
-		}
-		return raw, nil
-	}
 }
 
 // pollToAnswer polls the process's status until it reaches a terminal state,

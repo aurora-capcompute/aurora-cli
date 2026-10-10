@@ -61,10 +61,9 @@ id prefixes resolve):
   diff <revA> <revB>           where a process's two revisions diverge
 
 Act (history is append-only: there is no rm — these are the only writes):
-  spawn <input> [-manifest f|-] [-detach]
-                               run a process in the current session and follow
-                               it to its answer. The manifest is required:
-                               -manifest, else $AURORA_MANIFEST — never inherited.
+  spawn <input> [-detach]      run a process in the current session and follow
+                               it to its answer. The server's skills set what
+                               it may do.
   mkdir [name] [-tag k=v ...]  create a session (a directory); prints its handle
                                — the name, or a generated id if unnamed
   mv <session> <new-name>      rename a session

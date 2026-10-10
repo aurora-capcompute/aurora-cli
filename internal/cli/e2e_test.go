@@ -105,7 +105,7 @@ func scriptedLLM(t *testing.T) *httptest.Server {
 
 // startDist launches the distribution binary on a free port and waits for
 // its health endpoint.
-func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) {
+func startDist(t *testing.T, bin, programsDir, skillsDir, dataDir string) (baseURL string) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -114,10 +114,10 @@ func startDist(t *testing.T, bin, programsDir, dataDir string) (baseURL string) 
 	addr := listener.Addr().String()
 	_ = listener.Close()
 
-	cmd := exec.Command(bin, "-addr", addr, "-programs", programsDir, "-data", dataDir)
+	cmd := exec.Command(bin, "-addr", addr, "-programs", programsDir, "-skills", skillsDir, "-data", dataDir)
 	cmd.Env = append(os.Environ(),
 		"AURORA_TASK_SECRET=cli-e2e-secret-value", // >=16 bytes
-		"AURORA_SECRET_OPENAI_KEY=test",           // the manifest names it; the host holds it
+		"AURORA_SECRET_OPENAI_KEY=test",           // a skill names it; the host holds it
 	)
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
@@ -169,6 +169,17 @@ func aurora(t *testing.T, args ...string) string {
 	return out.String()
 }
 
+func writeSkills(t *testing.T, skills map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range skills {
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 // mountServer isolates a per-test context file and mounts the server.
 func mountServer(t *testing.T, server string) {
 	t.Helper()
@@ -192,24 +203,17 @@ func TestTerminalEndToEnd(t *testing.T) {
 	}
 	llm := scriptedLLM(t)
 	defer llm.Close()
-	server := startDist(t, bin, programsDir, t.TempDir())
+	skillsDir := writeSkills(t, map[string]string{
+		// No grant: every process gets sys.timer.
+		"nap": `{"description": "wait a while", "instructions": "Use sys.timer to wait."}`,
+		"llm": fmt.Sprintf(`{"description": "the model", "syscalls": [
+		  {"syscall": "core.openaiApi", "hidden": true,
+		   "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
+		   "capabilities": [{"operation": "chat", "require_approval": false}]}
+		]}`, llm.URL+"/v1"),
+	})
+	server := startDist(t, bin, programsDir, skillsDir, t.TempDir())
 	mountServer(t, server)
-
-	// A manifest file, as a user would write one.
-	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
-	manifest := fmt.Sprintf(`{
-	  "version": 4,
-	  "program": "agent",
-	  "syscalls": [
-	    {"syscall": "sys.timer"},
-	    {"syscall": "core.openaiApi", "hidden": true,
-	     "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
-	     "capabilities": [{"operation": "chat", "require_approval": false}]}
-	  ]
-	}`, llm.URL+"/v1")
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	// Sessions are explicit, named directories: mkdir then cd, like a shell.
 	if got := aurora(t, "mkdir", "nap-session"); !strings.Contains(got, "nap-session") {
@@ -224,7 +228,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	// spawn runs in the current session and follows the process through the
 	// timer park and fire to its answer. Flags after the message exercise
 	// interleaved parsing.
-	sent := aurora(t, "spawn", "take a nap, then report back", "-manifest", manifestPath)
+	sent := aurora(t, "spawn", "take a nap, then report back")
 	if !strings.Contains(sent, "process proc_") {
 		t.Fatalf("spawn output missing process id:\n%s", sent)
 	}
@@ -333,7 +337,7 @@ func TestTerminalEndToEnd(t *testing.T) {
 	}
 }
 
-// The HITL loop over the wire: a manifest whose LLM grant requires approval
+// The HITL loop over the wire: a skill whose LLM grant requires approval
 // parks the run on a durable task; approve resumes it to the answer; a
 // second turn denied fails the syscall and the run reports the failure.
 func TestTerminalApproveDeny(t *testing.T) {
@@ -358,25 +362,15 @@ func TestTerminalApproveDeny(t *testing.T) {
 		_, _ = w.Write(payload)
 	}))
 	defer llm.Close()
-	server := startDist(t, bin, programsDir, t.TempDir())
+	skillsDir := writeSkills(t, map[string]string{
+		"llm": fmt.Sprintf(`{"description": "the model, every call approved", "syscalls": [
+		  {"syscall": "core.openaiApi", "hidden": true,
+		   "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
+		   "capabilities": [{"operation": "chat", "require_approval": true}]}
+		]}`, llm.URL+"/v1"),
+	})
+	server := startDist(t, bin, programsDir, skillsDir, t.TempDir())
 	mountServer(t, server)
-
-	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
-	manifest := fmt.Sprintf(`{
-	  "version": 4,
-	  "program": "agent",
-	  "syscalls": [
-	    {"syscall": "core.openaiApi", "hidden": true,
-	     "base_url": %q, "api_key": {"secret": "OPENAI_KEY"}, "allow_insecure_http": true, "default_model": "stub",
-	     "capabilities": [{"operation": "chat", "require_approval": true}]}
-	  ]
-	}`, llm.URL+"/v1")
-	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// The manifest is an explicit input via $AURORA_MANIFEST — used by every
-	// spawn in this shell, never inherited from the session.
-	t.Setenv("AURORA_MANIFEST", manifestPath)
 
 	// Explicit named session, then spawn detached: the process parks awaiting
 	// approval.
@@ -403,9 +397,7 @@ func TestTerminalApproveDeny(t *testing.T) {
 		t.Fatalf("answer = %q", got)
 	}
 
-	// Second turn in the same session (the cwd): its manifest comes from
-	// $AURORA_MANIFEST again — not inherited from the session. Deny it, by bare
-	// task id.
+	// Second turn in the same session (the cwd). Deny it, by bare task id.
 	sent = aurora(t, "spawn", "-detach", "and again")
 	processID = extract(t, sent, "process ")
 	waitStatus(t, processID, "waiting_for_task")

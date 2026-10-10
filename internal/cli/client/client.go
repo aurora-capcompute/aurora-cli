@@ -219,12 +219,9 @@ func (c *Client) Session(ctx context.Context, id string) (SessionLog, error) {
 	return call[SessionLog](ctx, c, http.MethodGet, "/v1/sessions/"+url.PathEscape(id), nil)
 }
 
-func (c *Client) CreateProcess(ctx context.Context, sessionID, input string, manifest json.RawMessage) (Process, error) {
-	body := map[string]any{"input": input}
-	if len(manifest) > 0 {
-		body["manifest"] = manifest
-	}
-	return call[Process](ctx, c, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/processes", body)
+func (c *Client) CreateProcess(ctx context.Context, sessionID, input string) (Process, error) {
+	return call[Process](ctx, c, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/processes",
+		map[string]any{"input": input})
 }
 
 // GetProcess is the cheap single-process status poll.
