@@ -1,21 +1,22 @@
 package cli
 
-// The distribution's virtual filesystem. Aurora's event-sourced state is a
-// tree, so the terminal browses it as one:
+// The distribution as a tree:
 //
-//	/                    the server: sessions, plus programs/
-//	/programs/agent      loaded program artifacts
+//	/                                the server: sessions, and programs/
+//	/programs/<id>                   a loaded program
+//	/<session>                       a session (its name, or its id)
+//	/<session>/history               its conversation
+//	/<session>/<process>             a process: status input answer error manifest,
+//	                                 revisions/ and tasks/
+//	/<session>/<process>/revisions/<r>/<position>   a journal entry, as revision r sees it
+//	/<session>/<process>/tasks/<task>               a durable task
 //
-// resolveNode turns a path into a typed node, fetching what it needs from
-// the API — one GET /v1/sessions/{id} carries everything at or below a
-// session. Segments resolve by exact id, else by unique prefix. Recorded
-// history is append-only, so there is no rm or touch — nothing already logged
-// can be deleted or edited; the writes are session management (mkdir, mv) and
-// the process verbs (spawn, kill, retry, approve, deny).
+// resolveNode turns a path into a typed node, fetching what it needs: one GET
+// /v1/sessions/{id} carries everything at or below a session. A segment
+// resolves by exact id, else by unique prefix.
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
@@ -365,33 +366,6 @@ func (a *app) list(ctx context.Context, n node) ([]lsEntry, error) {
 	}
 }
 
-func processFileLong(proc client.ProcessLog, file string) string {
-	switch file {
-	case "status":
-		return fmt.Sprintf("%-9s %s (attempt %d, revision %d)", file, proc.Status, proc.Attempt, proc.Revision)
-	case "input":
-		return fmt.Sprintf("%-9s %s", file, truncate(proc.Input, 72))
-	case "answer":
-		return fmt.Sprintf("%-9s %s", file, truncate(proc.Answer, 72))
-	case "error":
-		return fmt.Sprintf("%-9s %s", file, truncate(proc.Error, 72))
-	case "manifest":
-		return fmt.Sprintf("%-9s %s", file, compact(proc.Manifest, 72))
-	}
-	return file
-}
-
-// taskLine renders a task the way ls -l renders a symlink: a durable task's
-// identity is the open intent at its journal position, so show the link.
-func taskLine(task client.Task) string {
-	line := fmt.Sprintf("%s -> ../%d  %-9s %-14s %s",
-		task.ID, task.JournalPosition, task.State, task.Syscall.Name, sanitizeTerminal(truncate(task.Summary, 48)))
-	if task.Resolution.Decision != "" {
-		line += fmt.Sprintf("  (resolved %s by %s)", task.Resolution.Decision, task.Resolution.Actor)
-	}
-	return line
-}
-
 // --- file contents ---
 
 // catLines renders a file node's content as lines: the conversation for
@@ -435,55 +409,4 @@ func catLines(n node) ([]string, error) {
 		return nil, fmt.Errorf("%s: is a directory", n.path)
 	}
 	return nil, noEnt(n.path)
-}
-
-func valueLines(value string) []string {
-	if value == "" {
-		return nil
-	}
-	return strings.Split(sanitizeTerminal(value), "\n")
-}
-
-// sanitizeTerminal neutralizes control characters in guest- or model-authored
-// text before it reaches the operator's terminal. The CLI is the operator's
-// audit lens over untrusted guest activity, so an answer, error, fetched web
-// page, or journal message that smuggles ANSI/OSC escape sequences (or a
-// carriage return / backspace) could otherwise repaint or hide what a process
-// actually did. Newline and tab are preserved for layout; every other C0/C1
-// control (and DEL) becomes the visible, inert replacement rune.
-func sanitizeTerminal(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
-			return r
-		}
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return '�'
-		}
-		return r
-	}, s)
-}
-
-// fileLong is a file node's -l line.
-func fileLong(n node) string {
-	switch n.kind {
-	case nodeHistory:
-		return fmt.Sprintf("history  %d turns", len(n.log.History))
-	case nodeProcessFile:
-		return processFileLong(n.process, n.file)
-	case nodeEntry:
-		return renderEntry(n.entry, 96)
-	case nodeTask:
-		return taskLine(n.task)
-	case nodeProgram:
-		return fmt.Sprintf("%-20s %s  %s", n.program.ID, truncate(n.program.Digest, 16), sanitizeTerminal(truncate(n.program.Description, 56)))
-	}
-	return path.Base(n.path)
-}
-
-func jsonLines(value any) ([]string, error) {
-	raw, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return strings.Split(string(raw), "\n"), nil
 }
